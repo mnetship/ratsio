@@ -8,8 +8,7 @@ description = "Ratsio is a Rust client library for NATS messaging system and NAT
 categories = [
     "network-programming",
     "web-programming",
-    "database",
-    "streaming",
+    "asynchronous",
     "queue",
 ]
 homepage = "https://github.com/mnetship/ratsio"
