@@ -14,7 +14,7 @@ categories = [
 ]
 homepage = "https://github.com/mnetship/ratsio"
 repository = "https://github.com/mnetship/ratsio"
-keywords = ["nats", "nats streaming", "async", "tokio"]
+keywords = ["nats", "streaming", "async", "tokio"]
 license = "MIT"
 edition = "2018"
 
