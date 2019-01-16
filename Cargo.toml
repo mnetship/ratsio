@@ -5,6 +5,13 @@ readme = "README.md"
 authors = ["Michael Netshipise <michael@zulzi.com>"]
 description = "Ratsio is a Rust client library for NATS messaging system and NATS Event Streaming."
 #documentation = "https://docs.rs/ratsio"
+categories = [
+    "network-programming",
+    "web-programming",
+    "database",
+    "streaming",
+    "queue",
+]
 homepage = "https://github.com/mnetship/ratsio"
 repository = "https://github.com/mnetship/ratsio"
 keywords = ["nats", "nats streaming", "async", "tokio"]
