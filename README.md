@@ -2,7 +2,9 @@
 
 Ratsio is a Rust client library for [NATS](https://nats.io) messaging system and [NATS Event Streaming](https://nats.io/documentation/streaming/nats-streaming-intro/).
 
-Inspired by [nitox](https://raw.githubusercontent.com/YellowInnovation/nitox) and [rust-nats](https://github.com/jedisct1/rust-nats) but my project needed NATS streaming, so I couldn't use any of those 2. If this project is useful to you, feel free to contribute or suggest features. at the moment it's just the features I need. Add the following to your Cargo.toml.
+Inspired by [nitox](https://raw.githubusercontent.com/YellowInnovation/nitox) and [rust-nats](https://github.com/jedisct1/rust-nats) but my project needed NATS streaming, so I couldn't use any of those 2. If this project is useful to you, feel free to contribute or suggest features. at the moment it's just the features I need.
+
+Add the following to your Cargo.toml.
 
 ```rust
 [dependencies]
