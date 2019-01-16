@@ -1,0 +1,30 @@
+[package]
+name = "ratsio"
+version = "0.1.0"
+authors = ["Michael Netshipise <michael@nandie.com>"]
+edition = "2018"
+
+[dependencies]
+bytes               = "^0.4"
+failure             = "^0.1"
+failure_derive      = "^0.1"
+futures             = "^0.1"
+nuid                = {git = "https://github.com/mnetship/rs-nuid"}
+serde               = {version="^1.0"}
+serde_derive        = {version="^1.0"}
+serde_json          = {version="^1.0"}
+protobuf            = { version = "^2.0"}
+chrono              = "^0.4"
+env_logger          = "^0.6"
+log                 = "^0.4"
+nom                 = {version = "^4.1", features = ["regexp", "verbose-errors"]}
+tokio               = {version="^0.1"}
+tokio-tcp           = "^0.1"
+native-tls          = "^0.2"
+tokio-tls           = "^0.2"
+parking_lot         = "^0.7"
+derive_builder      = "^0.7"
+url                 = "^1.7"
+regex               = "^1"
+sha2                = "^0.8"
+atomic-counter      = "^1.0"
