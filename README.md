@@ -130,3 +130,10 @@ Subscribing and Publishing to a NATS streaming subject: see tests/stan_client_te
     let _ = close_rx.wait().expect(" Could not close STAN Client");
     let _ = runtime.shutdown_now().wait();
 ```
+
+
+# Contact
+For bug reports, patches, feature requests or other messages, please send a mail to michael@zulzi.com
+
+# License
+This project is licensed under the MIT License.
