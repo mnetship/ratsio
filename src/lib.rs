@@ -10,6 +10,9 @@ extern crate serde_derive;
 extern crate derive_builder;
 
 #[macro_use]
+extern crate lazy_static;
+
+#[macro_use]
 extern crate log;
 
 //use protobuf::{CachedSize, UnknownFields};
@@ -21,3 +24,4 @@ pub mod net;
 pub mod nats_client;
 pub mod stan_client;
 pub mod prelude;
+pub mod nuid;

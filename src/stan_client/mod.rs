@@ -3,7 +3,7 @@ use futures::{
     Future,
     sync::mpsc,
 };
-use nuid::NUID;
+use crate::nuid::NUID;
 use parking_lot::RwLock;
 use std::{
     collections::HashMap,

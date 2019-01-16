@@ -9,7 +9,7 @@ bytes               = "^0.4"
 failure             = "^0.1"
 failure_derive      = "^0.1"
 futures             = "^0.1"
-nuid                = {git = "https://github.com/mnetship/rs-nuid"}
+rand                = "^0.4"
 serde               = {version="^1.0"}
 serde_derive        = {version="^1.0"}
 serde_json          = {version="^1.0"}
@@ -28,3 +28,4 @@ url                 = "^1.7"
 regex               = "^1"
 sha2                = "^0.8"
 atomic-counter      = "^1.0"
+lazy_static         = "^1.2"

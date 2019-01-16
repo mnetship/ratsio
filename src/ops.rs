@@ -2,7 +2,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::collections::HashMap;
 use std::convert::From;
 use crate::error::RatsioError;
-use nuid::NUID;
+use crate::nuid::NUID;
 
 
 #[derive(Debug, PartialEq)]

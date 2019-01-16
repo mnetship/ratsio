@@ -11,7 +11,7 @@ use futures::{
     stream::Stream,
     sync::mpsc,
 };
-use nuid::NUID;
+use crate::nuid::NUID;
 use parking_lot::RwLock;
 use protobuf::{Message as ProtoMessage, parse_from_bytes};
 use sha2::{Digest, Sha256};
