@@ -2,7 +2,14 @@
 name = "ratsio"
 version = "0.1.0"
 authors = ["Michael Netshipise <michael@zulzi.com>"]
+description = "Ratsio is a Rust client library for NATS messaging system and NATS Event Streaming."
+#documentation = "https://docs.rs/ratsio"
+homepage = "https://github.com/mnetship/ratsio"
+repository = "https://github.com/mnetship/ratsio"
+keywords = ["nats", "nats streaming", "async", "tokio"]
+license = "MIT"
 edition = "2018"
+
 
 [dependencies]
 bytes               = "^0.4"
