@@ -1,7 +1,7 @@
 [package]
 name = "ratsio"
 version = "0.1.0"
-authors = ["Michael Netshipise <michael@nandie.com>"]
+authors = ["Michael Netshipise <michael@zulzi.com>"]
 edition = "2018"
 
 [dependencies]
