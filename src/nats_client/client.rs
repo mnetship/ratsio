@@ -322,8 +322,16 @@ impl NatsClient {
     /// Returns `impl Future<Item = Self, Error = RatsioError>`
     pub fn connect(client: &Arc<Self>) -> impl Future<Item=Arc<Self>, Error=RatsioError> + Send + Sync {
         let ret_client = client.clone();
+        let mut connect = client.opts.connect.clone();
+        let node_url = (*client.connection.inner.read()).0.clone();
+        if let Some(password) = node_url.password() {
+            connect.pass = Some(password.to_string())
+        }
+        if !node_url.username().is_empty() {
+            connect.user = Some(node_url.username().to_string())
+        }
         client.sender.read()
-            .send(Op::CONNECT(client.opts.connect.clone()))
+            .send(Op::CONNECT(connect))
             .and_then(move |_| future::ok(ret_client))
     }
 
