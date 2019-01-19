@@ -70,8 +70,24 @@ pub struct NatsClientMultiplexer {
 #[derive(Debug, Clone, Builder, PartialEq)]
 #[builder(setter(into), default)]
 pub struct NatsClientOptions {
-    /// CONNECT command that will be sent upon calling the `connect()` method
-    pub connect: Connect,
+    /// Cluster username, can be overwritten by host url nats://<username>:<password>@<host>:<port>
+    pub username: Option<String>,
+    /// Cluster password, can be overwritten by host url nats://<username>:<password>@<host>:<port>
+    pub password: Option<String>,
+    /// Cluster auth_token
+    pub auth_token: Option<String>,
+    /// Whether TLS is required.
+    pub tls_required: bool,
+    /// verbosity, default true
+    pub verbose: bool,
+    /// pedantic, default false
+    pub pedantic: bool,
+    /// pedantic, default true
+    pub echo: bool,
+    /// Optional client name
+    pub name: Option<String>,
+
+
     /// Cluster URI in the IP:PORT format
     pub cluster_uris: Vec<String>,
 
@@ -92,7 +108,14 @@ pub struct NatsClientOptions {
 impl Default for NatsClientOptions {
     fn default() -> Self {
         NatsClientOptions {
-            connect: Connect::default(),
+            username: None,
+            password: None,
+            tls_required: false,
+            auth_token: None,
+            verbose: true,
+            pedantic: false,
+            echo: true,
+            name: None,
             cluster_uris: Vec::new(),
             ping_interval: 5,
             ping_max_out: 3,

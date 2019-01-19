@@ -20,7 +20,6 @@ fn test_stan_pub_sub() {
     let mut runtime = Runtime::new().unwrap();
 
     let nats_options = NatsClientOptions::builder()
-        .connect(Connect::builder().build().unwrap())
         .cluster_uris(vec!(String::from("127.0.0.1:4222")))
         .build()
         .unwrap();

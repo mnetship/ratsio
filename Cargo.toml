@@ -22,7 +22,7 @@ bytes               = "^0.4"
 failure             = "^0.1"
 failure_derive      = "^0.1"
 futures             = "^0.1"
-rand                = "^0.4"
+rand                = "^0.6"
 serde               = {version="^1.0"}
 serde_derive        = {version="^1.0"}
 serde_json          = {version="^1.0"}

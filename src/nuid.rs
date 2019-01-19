@@ -16,7 +16,9 @@
 extern crate rand;
 
 use rand::thread_rng;
-use rand::{OsRng, Rng};
+use rand::rngs::{OsRng};
+use rand::distributions::Alphanumeric;
+use rand::Rng;
 use std::sync::Mutex;
 
 const BASE: usize = 62;
@@ -54,13 +56,16 @@ pub struct NUID {
 
 }
 
+
+
 impl NUID {
     /// generate a new `NUID` and properly initialize the prefix, sequential start, and sequential increment.
     pub fn new() -> NUID {
+        let mut rng = thread_rng();
+        let seq = Rng::gen_range::<u64, u64, _>(&mut rng, 0, MAX_SEQ);
+        let inc = MIN_INC + Rng::gen_range::<u64, u64, _>(&mut rng, 0, MAX_INC+MIN_INC);
         let mut n = NUID {
-            pre: [0; PRE_LEN],
-            seq: thread_rng().gen_range::<u64>(0, MAX_SEQ),
-            inc: MIN_INC + thread_rng().gen_range(0, MAX_INC+MIN_INC),
+            pre: [0; PRE_LEN], seq, inc,
         };
         n.randomize_prefix();
         n
@@ -68,7 +73,7 @@ impl NUID {
 
     pub fn randomize_prefix(&mut self) {
         let mut rng = OsRng::new().expect("failed to get crypto random number generator");
-        for (i, n) in rng.gen_iter::<u8>().take(PRE_LEN).enumerate() {
+        for (i, n) in rng.sample_iter(&Alphanumeric).take(PRE_LEN).enumerate() {
             self.pre[i] = ALPHABET[n as usize % BASE];
         }
     }
@@ -99,8 +104,8 @@ impl NUID {
 
     fn reset_sequential(&mut self) {
         let mut rng = thread_rng();
-        self.seq = rng.gen_range::<u64>(0, MAX_SEQ);
-        self.inc = MIN_INC + rng.gen_range::<u64>(0, MIN_INC+MAX_INC);
+        self.seq = Rng::gen_range::<u64, _, _>(&mut rng, 0, MAX_SEQ);
+        self.inc = MIN_INC + Rng::gen_range::<u64, _, _>(&mut rng, 0, MIN_INC+MAX_INC);
     }
 }
 

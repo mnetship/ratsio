@@ -21,9 +21,7 @@ fn test_pub_sub() {
     common::setup();
 
     let mut runtime = Runtime::new().unwrap();
-    let connect_cmd = Connect::builder().build().unwrap();
     let options = NatsClientOptions::builder()
-        .connect(connect_cmd)
         .cluster_uris(vec!(String::from("localhost:4222")))
         .build()
         .unwrap();
@@ -61,9 +59,7 @@ fn test_pub_sub() {
 fn test_connect() {
     common::setup();
     let mut runtime = Runtime::new().unwrap();
-    let connect_cmd = Connect::builder().build().unwrap();
     let options = NatsClientOptions::builder()
-        .connect(connect_cmd)
         .cluster_uris(vec!(String::from("127.0.0.1:4222")))
         .build()
         .unwrap();
@@ -84,9 +80,7 @@ fn test_request() {
     common::setup();
     let mut runtime = tokio::runtime::Runtime::new().unwrap();
 
-    let connect_cmd = Connect::builder().build().unwrap();
     let options = NatsClientOptions::builder()
-        .connect(connect_cmd)
         .cluster_uris(vec!(String::from("127.0.0.1:4222")))
         .build()
         .unwrap();

@@ -8,7 +8,7 @@ Add the following to your Cargo.toml.
 
 ```rust
 [dependencies]
-ratsio = "^0.1"
+ratsio = "^0.2"
 ```
 Rust -stable, -beta and -nightly are supported.
 
@@ -16,18 +16,16 @@ Rust -stable, -beta and -nightly are supported.
 - [x] Nats messaging queue. Publish, Subcribe and Request.
 - [x] Nats cluster support, auto reconnect and dynamic cluster hosts update.
 - [x] Async from the ground up, using  [tokio](https://crates.io/crates/tokio) and [futures](https://crates.io/crates/futures).
-- [ ] TLS mode
-- [ ] Authentication
+- [x] TLS mode
+- [x] Authentication
 - [x] NATS Streaming Server
 # Usage
 
 Subscribing and Publishing to a NATS subject: see tests/nats_client_test.rs
 ```rust
     let mut runtime = Runtime::new().unwrap();
-    let connect_cmd = Connect::builder().build().unwrap();
     let options = NatsClientOptions::builder()
-        .connect(connect_cmd)
-        .cluster_uris(vec!(String::from("127.0.0.1:4222")))
+        .cluster_uris(vec!("127.0.0.1:4222"))
         .build()
         .unwrap();
 
@@ -64,14 +62,13 @@ Subscribing and Publishing to a NATS streaming subject: see tests/stan_client_te
 ``` rust
     let mut runtime = Runtime::new().unwrap();
     let nats_options = NatsClientOptions::builder()
-        .connect(Connect::builder().build().unwrap())
-        .cluster_uris(vec!(String::from("127.0.0.1:4222")))
+        .cluster_uris(vec!("127.0.0.1:4222"))
         .build()
         .unwrap();
     let stan_options = StanOptions::builder()
         .nats_options(nats_options)
-        .cluster_id("test-cluster".into())
-        .client_id("main-1".into()).build()
+        .cluster_id("test-cluster")
+        .client_id("main-1").build()
         .unwrap();
     let (result_tx, result_rx) = mpsc::unbounded();
 
@@ -132,10 +129,24 @@ Subscribing and Publishing to a NATS streaming subject: see tests/stan_client_te
     let _ = close_rx.wait().expect(" Could not close STAN Client");
     let _ = runtime.shutdown_now().wait();
 ```
+#  Important Changes
 
+## Version 0.2
+Users no longer need to use ratsio Connect struct when configuring a connection.
+
+``` rust
+    let nats_options = NatsClientOptions::builder()
+        .username("user")
+        .password("password")
+        .cluster_uris(vec!("127.0.0.1:4222"))
+        .build()
+        .unwrap();
+```
 
 # Contact
 For bug reports, patches, feature requests or other messages, please send a mail to michael@zulzi.com
 
 # License
 This project is licensed under the MIT License.
+
+

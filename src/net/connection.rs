@@ -57,6 +57,7 @@ impl NatsConnection {
     /// Connect to a raw TCP socket
     fn connect(addr: SocketAddr) -> impl Future<Item=NatsConnectionInner, Error=RatsioError> {
         NatsConnectionInner::connect_tcp(&addr).map(move |socket| {
+            debug!(target: "ratsio", "Got a socket successfully.");
             socket.into()
         })
     }
@@ -65,6 +66,7 @@ impl NatsConnection {
     fn connect_tls(host: String, addr: SocketAddr) -> impl Future<Item=NatsConnectionInner, Error=RatsioError> {
         NatsConnectionInner::connect_tcp(&addr)
             .and_then(move |socket| {
+                debug!(target: "ratsio", "Got a socket successfully, upgrading to TLS");
                 NatsConnectionInner::upgrade_tcp_to_tls(&host, socket)
             })
             .map(move |socket| {

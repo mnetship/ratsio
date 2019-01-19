@@ -228,7 +228,7 @@ impl Default for Connect {
             pass: None,
             name: None,
             lang: "rust".into(),
-            version: "0.1.0".into(),
+            version: "0.2.0".into(),
             protocol: 1,
             echo: true,
         }

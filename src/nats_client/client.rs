@@ -131,13 +131,14 @@ impl NatsClient {
     /// Create nats client with options
     /// Called internally depending on the user options.
     fn create_client(opts: NatsClientOptions) -> impl Future<Item=Arc<Self>, Error=RatsioError> + Send + Sync {
-        let tls_required = opts.connect.tls_required;
+        let tls_required = opts.tls_required;
         let cluster_uris = opts.cluster_uris.clone();
         let recon_opts = opts.clone();
         let (reconnect_handler_tx, reconnect_handler_rx) = mpsc::unbounded();
         NatsConnection::create_connection(reconnect_handler_tx.clone(),
                                           opts.reconnect_timeout, cluster_uris, tls_required)
             .and_then(move |connection| {
+                debug!(target:"ratsio", "Creating NATS client, got a connection.");
                 let connection = Arc::new(connection);
                 let stream_conn = connection.clone();
                 let ping_conn = connection.clone();
@@ -193,14 +194,13 @@ impl NatsClient {
                             }
 
                             if attempts > ping_max_out {
-                                error!(target: "ratsio", "Pings are not responded to, we ma be down.");
+                                error!(target: "ratsio", "Pings are not responded to, we may be down.");
                                 *ping_client.state.write() = NatsClientState::Disconnected;
                                 NatsConnection::trigger_reconnect(ping_conn.clone());
                             }
                         }
                         Ok(())
                     }).map_err(|_| ()));
-
 
                 let recon_client = client.clone();
                 tokio::spawn(reconnect_handler_rx.for_each(move |conn| {
@@ -322,7 +322,21 @@ impl NatsClient {
     /// Returns `impl Future<Item = Self, Error = RatsioError>`
     pub fn connect(client: &Arc<Self>) -> impl Future<Item=Arc<Self>, Error=RatsioError> + Send + Sync {
         let ret_client = client.clone();
-        let mut connect = client.opts.connect.clone();
+
+        let mut connect = Connect {
+            verbose: client.opts.verbose,
+            pedantic: client.opts.pedantic,
+            tls_required: client.opts.tls_required,
+            auth_token: client.opts.auth_token.clone(),
+            user: client.opts.username.clone(),
+            pass: client.opts.password.clone(),
+            name: client.opts.name.clone(),
+            lang: "rust".to_string(),
+            version: "0.2.0".to_string(),
+            protocol: 1,
+            echo: client.opts.echo,
+        };
+
         let node_url = (*client.connection.inner.read()).0.clone();
         if let Some(password) = node_url.password() {
             connect.pass = Some(password.to_string())

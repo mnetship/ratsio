@@ -11,7 +11,6 @@ use futures::{
 };
 use log::LevelFilter;
 use ratsio::nats_client::*;
-use ratsio::ops::*;
 use ratsio::stan_client::*;
 use std::io::Write;
 use tokio::runtime::Runtime;
@@ -32,7 +31,6 @@ fn main() {
         .try_init();
 
     let nats_options = NatsClientOptions::builder()
-        .connect(Connect::builder().build().unwrap())
         .cluster_uris(vec!(String::from("127.0.0.1:4222")))
         .build()
         .unwrap();

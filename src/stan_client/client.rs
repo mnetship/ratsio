@@ -1,5 +1,6 @@
 use crate::error::RatsioError;
 use crate::nats_client::NatsClient;
+use crate::nuid::NUID;
 use crate::ops::{Publish, Subscribe};
 use crate::protocol::{
     Ack, CloseRequest, ConnectRequest, ConnectResponse,
@@ -11,7 +12,6 @@ use futures::{
     stream::Stream,
     sync::mpsc,
 };
-use crate::nuid::NUID;
 use parking_lot::RwLock;
 use protobuf::{Message as ProtoMessage, parse_from_bytes};
 use sha2::{Digest, Sha256};
@@ -23,6 +23,20 @@ use std::{
     },
 };
 use super::*;
+
+impl Into<ClientInfo> for ConnectResponse {
+    fn into(self) -> ClientInfo {
+        ClientInfo {
+            pub_prefix: self.pubPrefix.clone(),
+            sub_requests: self.subRequests.clone(),
+            unsub_requests: self.unsubRequests.clone(),
+            sub_close_requests: self.subCloseRequests.clone(),
+            close_requests: self.closeRequests.clone(),
+            ping_requests: self.pingRequests.clone(),
+        }
+    }
+}
+
 
 impl StanClient {
     pub fn from_options(options: StanOptions) -> impl Future<Item=Arc<Self>, Error=RatsioError> {
@@ -38,27 +52,35 @@ impl StanClient {
         let client_id = options.client_id.clone();
 
         let mut nats_options = options.nats_options.clone();
-        nats_options.connect.name = Some(client_id.clone());
+        nats_options.name = Some(client_id.clone());
         nats_options.subscribe_on_reconnect = false;
         NatsClient::from_options(nats_options.clone())
-            .and_then(|client| NatsClient::connect(&client))
+            .and_then(|client| {
+                debug!(target: "ratsio", "Connecting NATS client");
+                NatsClient::connect(&client)
+            })
             .and_then(move |nats_client: Arc<NatsClient>| {
+                debug!(target: "ratsio", "Got NATS client");
                 let mut connect_request = ConnectRequest::new();
                 connect_request.set_clientID(client_id.clone());
                 connect_request.set_connID(conn_id.clone().into_bytes());
                 connect_request.set_heartbeatInbox(heartbeat_inbox.clone());
 
+                debug!(target: "ratsio", "Connecting STAN Client");
                 let connect_payload = ProtoMessage::write_to_bytes(&connect_request).unwrap();
                 let (tx, rx) = mpsc::unbounded::<String>();
 
+                debug!(target: "ratsio", "Subscibing to STAN Client heartbeats");
                 StanClient::process_heartbeats(
                     id_generator.clone(), &conn_id, &client_id, &heartbeat_inbox, nats_client.clone());
 
                 let recon_discover_subject = discover_subject.clone();
+                debug!(target: "ratsio", "Issuing STAN join request");
+                //TODO add a timeout for cases where the STAN server does not reply.
                 nats_client.request(discover_subject, &connect_payload).map(move |response| {
                     let connect_response = parse_from_bytes::<ConnectResponse>(
                         &response.payload[..]).unwrap();
-                    let client_info = StanClient::connect_response2client_info(&connect_response);
+                    let client_info : ClientInfo= connect_response.clone().into();
                     let stan_client = Arc::new(StanClient {
                         //subs_tx: Arc::new(RwLock::new(HashMap::default())),
                         options: StanOptions {
@@ -110,7 +132,7 @@ impl StanClient {
             let close_requests_subject = stan_client.client_info.read().close_requests.clone();
             close_request.set_clientID(stan_client.client_id.clone());
             let buf = ProtoMessage::write_to_bytes(&close_request).unwrap();
-            warn!(target: "ratsio", " STAN Closing connection for reconnect ...");
+            info!(target: "ratsio", " STAN Reconnecting closing old connection");
             let close_fut = nats_client.request(close_requests_subject.clone(), buf[..].into());
 
             let conn_id = stan_client.id_generator.write().next();
@@ -127,39 +149,56 @@ impl StanClient {
             connect_request.set_connID(conn_id.clone().into_bytes());
             connect_request.set_heartbeatInbox(heartbeat_inbox.clone());
 
+
+            let print_subs = stan_client.subscriptions.read().clone();
+            info!(target: "ratsio", " 1 STAN Reconnecting Subscriptions [{}]\n\n{:?}", print_subs.len(),
+                  print_subs.iter().map(|(key, sub)| format!("{} =>  {}", key, sub.inbox)).collect::<Vec<_>>());
+
+
             let buf = ProtoMessage::write_to_bytes(&connect_request).unwrap();
             let recon_subs_stan_client = stan_client.clone();
             let recon_fut = stan_client.nats_client
                 .request(discover_subject.clone(), &buf)
                 .map_err(|_| ())
                 .and_then(move |response| {
+                    info!(target: "ratsio", " STAN Reconnecting Response => {:?}", &response);
                     let connect_response = parse_from_bytes::<ConnectResponse>(
                         &response.payload[..]).unwrap();
 
-                    let client_info = StanClient::connect_response2client_info(&connect_response);
+                    let client_info: ClientInfo = connect_response.into();
+                    info!(target: "ratsio", " STAN Reconnecting ClientInfo => {:?}", &client_info);
                     *recon_subs_stan_client.client_info.write() = client_info;
+
+                    let print_subs = recon_subs_stan_client.subscriptions.read().clone();
+                    info!(target: "ratsio", " STAN Reconnecting Subscriptions [{}]\n\n{:?}", print_subs.len(),
+                          print_subs.iter().map(|(key, sub)| format!("{} =>  {}", key, sub.inbox)).collect::<Vec<_>>());
 
                     let subs_fut_list = {
                         let subscriptions = recon_subs_stan_client.subscriptions.read();
                         subscriptions.iter().map(|(id, sub)| {
                             let subject = sub.cmd.subject.clone();
+                            let err_subject = sub.cmd.subject.clone();
                             recon_subs_stan_client
                                 .subscribe_inner(sub.cmd.clone(), id.clone(), sub.handler.clone())
                                 .map(move |_| {
-                                    debug!(target: "ratsio", "Subject re-subscribed ^^^^^^^^ {}", subject)
+                                    debug!(target: "ratsio", "Subject re-subscribed to => {}", subject)
                                 })
-                                .or_else(|err| {
-                                    error!(target: "ratsio", "Error re-subscribing after reconnect {:?}", err);
+                                .or_else(move |err| {
+                                    error!(target: "ratsio", "Error re-subscribing to => {} after reconnect {:?}", err_subject, err);
                                     Ok(())
                                 })
                         }).collect::<Vec<_>>()
                     };
                     future::join_all(subs_fut_list).map(|_| ())
                 });
-            tokio::spawn(close_fut.then(|_|
+            tokio::spawn(close_fut.then(|_| {
+                info!(target: "ratsio", " STAN Reconnecting ...");
                 recon_fut.map_err(|err| {
                     error!(target: "ratsio", "Error reconnecting to STAN: {:?}", err)
-                })));
+                }).map(|_| {
+                    info!(target: "ratsio", " STAN Reconnecting Done, Ready!");
+                })
+            }));
         }));
     }
 
@@ -203,17 +242,6 @@ impl StanClient {
             }).map_err(|err| {
             error!(target: "ratsio", "Error in heartbeat stream {:?}", err);
         }));
-    }
-
-    fn connect_response2client_info(connect_response: &ConnectResponse) -> ClientInfo {
-        ClientInfo {
-            pub_prefix: connect_response.pubPrefix.clone(),
-            sub_requests: connect_response.subRequests.clone(),
-            unsub_requests: connect_response.unsubRequests.clone(),
-            sub_close_requests: connect_response.subCloseRequests.clone(),
-            close_requests: connect_response.closeRequests.clone(),
-            ping_requests: connect_response.pingRequests.clone(),
-        }
     }
 
     fn sub_request_payload(&self, subscribe: &StanSubscribe, inbox: &str) -> Vec<u8> {
@@ -331,7 +359,7 @@ impl StanClient {
         let publ = Publish::builder()
             .subject(format!("{}.{}", self.client_info.read().pub_prefix, message.subject))
             .payload(payload).build().unwrap();
-        trace!(target: "ratsio", " -------------  publishing to topic : {}", publ.subject);
+        trace!(target: "ratsio", "publishing to topic : {}", publ.subject);
         self.nats_client.publish(publ)
     }
 
@@ -355,7 +383,7 @@ impl StanClient {
                 debug!(target: "ratsio", " STAN Shutting down ...");
                 nats_client.request(close_requests.clone(), buf[..].into())
             })
-            .map(|_| debug!(target: "ratsio", " STAN Shutting down - DONE "))
+            .map(|_| debug!(target: "ratsio", "STAN Shutting down - DONE "))
             .from_err()
     }
 }
