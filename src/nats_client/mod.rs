@@ -102,8 +102,9 @@ pub struct NatsClientOptions {
     pub ensure_connect: bool,
     /// Time between connection retries
     pub reconnect_timeout: u64,
-
 }
+
+
 
 impl Default for NatsClientOptions {
     fn default() -> Self {

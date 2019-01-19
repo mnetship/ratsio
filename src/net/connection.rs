@@ -144,28 +144,29 @@ impl NatsConnection {
     }
 
     pub fn create_connection(reconnect_handler: ReconnectHandler, reconnect_timeout: u64,
-                             cluster_uris: Vec<String>, tls_required: bool) -> impl Future<Item=NatsConnection, Error=RatsioError> {
-        let cluster_addrs = NatsConnection::parse_uris(&cluster_uris);
+                             cluster_uris: &[String], tls_required: bool) -> impl Future<Item=NatsConnection, Error=RatsioError> {
+        let cluster_addrs = NatsConnection::parse_uris(cluster_uris);
+        let init_hosts = cluster_uris.to_vec();
         NatsConnection::get_conn_inner(cluster_addrs, tls_required)
             .map(move |inner| {
                 NatsConnection {
                     is_tls: tls_required,
                     state: Arc::new(RwLock::new((NatsConnectionState::Connected, 0))),
                     inner: Arc::new(RwLock::new(inner)),
-                    init_hosts: cluster_uris.clone(),
-                    reconnect_hosts: RwLock::new(cluster_uris),
+                    init_hosts: init_hosts.clone(),
+                    reconnect_hosts: RwLock::new(init_hosts),
                     reconnect_handler,
                     reconnect_timeout,
                 }
             })
     }
 
-    pub fn parse_uris(cluster_uris: &Vec<String>) -> Vec<(Url, SocketAddr)> {
-        cluster_uris.clone().into_iter().map(|cluster_uri| {
+    pub fn parse_uris(cluster_uris: &[String]) -> Vec<(Url, SocketAddr)> {
+        cluster_uris.iter().map(|cluster_uri| {
             let formatted_url = if cluster_uri.starts_with("nats://") {
                 cluster_uri.clone()
             } else {
-                format!("nats://{}", &cluster_uri)
+                format!("nats://{}", cluster_uri)
             };
             let node_url = Url::parse(&formatted_url);
             match node_url {

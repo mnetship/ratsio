@@ -22,6 +22,7 @@ fn test_pub_sub() {
 
     let mut runtime = Runtime::new().unwrap();
     let options = NatsClientOptions::builder()
+        .username("".to_string())
         .cluster_uris(vec!(String::from("localhost:4222")))
         .build()
         .unwrap();

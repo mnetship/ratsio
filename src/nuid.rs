@@ -31,7 +31,7 @@ const ALPHABET: [u8; BASE as usize] = [b'0', b'1', b'2', b'3', b'4', b'5', b'6',
                                        b'y', b'z'];
 
 const PRE_LEN: usize = 12;
-const MAX_SEQ: u64 = 839299365868340224; // (BASE ^ remaining bytes 22 - 12) == 62^10
+const MAX_SEQ: u64 = 839_299_365_868_340_224; // (BASE ^ remaining bytes 22 - 12) == 62^10
 const MIN_INC: u64 = 33;
 const MAX_INC: u64 = 333;
 const TOTAL_LEN: usize = 22;
@@ -53,14 +53,11 @@ pub struct NUID {
     pre: [u8; PRE_LEN],
     seq: u64,
     inc: u64,
-
 }
 
+impl Default for NUID {
 
-
-impl NUID {
-    /// generate a new `NUID` and properly initialize the prefix, sequential start, and sequential increment.
-    pub fn new() -> NUID {
+   fn default() -> Self {
         let mut rng = thread_rng();
         let seq = Rng::gen_range::<u64, u64, _>(&mut rng, 0, MAX_SEQ);
         let inc = MIN_INC + Rng::gen_range::<u64, u64, _>(&mut rng, 0, MAX_INC+MIN_INC);
@@ -69,6 +66,14 @@ impl NUID {
         };
         n.randomize_prefix();
         n
+    }
+}
+
+
+impl NUID {
+    /// generate a new `NUID` and properly initialize the prefix, sequential start, and sequential increment.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn randomize_prefix(&mut self) {
@@ -79,6 +84,7 @@ impl NUID {
     }
 
     /// Generate the next `NUID` string.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> String {
         self.seq += self.inc;
         if self.seq >= MAX_SEQ {
@@ -95,7 +101,7 @@ impl NUID {
         let mut l = seq;
         for i in (PRE_LEN..TOTAL_LEN).rev() {
             b[i] = ALPHABET[l%BASE];
-            l = l/BASE;
+            l /= BASE;
         }
 
         // data is base62 encoded so this can't fail
@@ -172,7 +178,7 @@ mod tests {
     #[test]
     fn unique() {
         let mut set = HashSet::new();
-        for _ in 0..10_000_000 {
+        for _ in 0..100_000 {
             assert_eq!(set.insert(next()), true);
         }
 

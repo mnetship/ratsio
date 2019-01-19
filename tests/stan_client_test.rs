@@ -6,7 +6,6 @@ use futures::{
     sync::{mpsc, oneshot},
 };
 use ratsio::nats_client::*;
-use ratsio::ops::*;
 use ratsio::stan_client::*;
 use tokio::{
     runtime::Runtime,

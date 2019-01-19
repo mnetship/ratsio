@@ -132,11 +132,11 @@ impl NatsClient {
     /// Called internally depending on the user options.
     fn create_client(opts: NatsClientOptions) -> impl Future<Item=Arc<Self>, Error=RatsioError> + Send + Sync {
         let tls_required = opts.tls_required;
-        let cluster_uris = opts.cluster_uris.clone();
         let recon_opts = opts.clone();
+        let cluster_uris = opts.cluster_uris.clone();
         let (reconnect_handler_tx, reconnect_handler_rx) = mpsc::unbounded();
         NatsConnection::create_connection(reconnect_handler_tx.clone(),
-                                          opts.reconnect_timeout, cluster_uris, tls_required)
+                                          opts.reconnect_timeout, &cluster_uris[..], tls_required)
             .and_then(move |connection| {
                 debug!(target:"ratsio", "Creating NATS client, got a connection.");
                 let connection = Arc::new(connection);

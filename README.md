@@ -25,7 +25,7 @@ Subscribing and Publishing to a NATS subject: see tests/nats_client_test.rs
 ```rust
     let mut runtime = Runtime::new().unwrap();
     let options = NatsClientOptions::builder()
-        .cluster_uris(vec!("127.0.0.1:4222"))
+        .cluster_uris(vec!("127.0.0.1:4222".to_string()))
         .build()
         .unwrap();
 
@@ -62,7 +62,7 @@ Subscribing and Publishing to a NATS streaming subject: see tests/stan_client_te
 ``` rust
     let mut runtime = Runtime::new().unwrap();
     let nats_options = NatsClientOptions::builder()
-        .cluster_uris(vec!("127.0.0.1:4222"))
+        .cluster_uris(vec!("127.0.0.1:4222".to_string()))
         .build()
         .unwrap();
     let stan_options = StanOptions::builder()
@@ -132,16 +132,20 @@ Subscribing and Publishing to a NATS streaming subject: see tests/stan_client_te
 #  Important Changes
 
 ## Version 0.2
-Users no longer need to use ratsio Connect struct when configuring a connection.
+Users no longer need to use ratsio::ops::Connect struct when configuring a connection. Options are now availabble
+on NatsClientOptions, username, password, tls_required, auth_token, etc
 
+For example
 ``` rust
     let nats_options = NatsClientOptions::builder()
-        .username("user")
-        .password("password")
-        .cluster_uris(vec!("127.0.0.1:4222"))
+        .username("user".to_string())
+        .password("password".to_string())
+        .cluster_uris(vec!("127.0.0.1:4222".to_string()))
         .build()
         .unwrap();
 ```
+
+Internal nuid fork from [nuid](https://github.com/casualjim/rs-nuid) upgraded to use [rand](https://crates.io/crates/rand) version ^0.6
 
 # Contact
 For bug reports, patches, feature requests or other messages, please send a mail to michael@zulzi.com
