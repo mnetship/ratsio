@@ -144,12 +144,13 @@ For example
         .build()
         .unwrap();
 ```
+Internal nuid fork from [nuid](https://github.com/casualjim/rs-nuid) upgraded to use [rand](https://crates.io/crates/rand) version ^0.6
 
 ### Version 0.2.1
 More ergonomics when creating options. A bit easier on the eye.
 
 It is now possible to pass either of String, &str, Vec<String> or Vec<&str> to cluster_uris(...) on NatsClientOptions::builder(), use
-```rust use ratsio::prelude::VecUri;``` or just ```rust use ratsio::prelude::*;```
+```use ratsio::prelude::VecUri;``` or just ```use ratsio::prelude::*;```
 ``` rust
     let nats_options = NatsClientOptions::builder()
         .username("user")
@@ -167,8 +168,6 @@ or
         .build()
         .unwrap();
 ```
-
-Internal nuid fork from [nuid](https://github.com/casualjim/rs-nuid) upgraded to use [rand](https://crates.io/crates/rand) version ^0.6
 
 # Contact
 For bug reports, patches, feature requests or other messages, please send a mail to michael@zulzi.com
