@@ -15,6 +15,7 @@ pub use super::{
         NatsClientOptions,
         NatsClient,
         NatsClientState,
+        UriVec,
     },
     error::RatsioError,
     ops::{

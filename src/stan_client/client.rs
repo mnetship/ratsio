@@ -52,7 +52,7 @@ impl StanClient {
         let client_id = options.client_id.clone();
 
         let mut nats_options = options.nats_options.clone();
-        nats_options.name = Some(client_id.clone());
+        nats_options.name = client_id.clone();
         nats_options.subscribe_on_reconnect = false;
         NatsClient::from_options(nats_options.clone())
             .and_then(|client| {

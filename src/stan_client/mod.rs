@@ -35,7 +35,7 @@ const DEFAULT_ACK_WAIT: i32 = 30 * 60000;
 const DEFAULT_MAX_INFLIGHT: i32 = 1024;
 
 #[derive(Debug, Clone, PartialEq, Builder)]
-#[builder(default)]
+#[builder(setter(into), default)]
 pub struct StanOptions {
     pub nats_options: NatsClientOptions,
     pub cluster_id: String,

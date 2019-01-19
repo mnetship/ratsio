@@ -133,7 +133,7 @@ impl NatsClient {
     fn create_client(opts: NatsClientOptions) -> impl Future<Item=Arc<Self>, Error=RatsioError> + Send + Sync {
         let tls_required = opts.tls_required;
         let recon_opts = opts.clone();
-        let cluster_uris = opts.cluster_uris.clone();
+        let cluster_uris = opts.cluster_uris.0.clone();
         let (reconnect_handler_tx, reconnect_handler_rx) = mpsc::unbounded();
         NatsConnection::create_connection(reconnect_handler_tx.clone(),
                                           opts.reconnect_timeout, &cluster_uris[..], tls_required)
@@ -322,15 +322,15 @@ impl NatsClient {
     /// Returns `impl Future<Item = Self, Error = RatsioError>`
     pub fn connect(client: &Arc<Self>) -> impl Future<Item=Arc<Self>, Error=RatsioError> + Send + Sync {
         let ret_client = client.clone();
-
+        let not_empty = |x: &String| !x.is_empty();
         let mut connect = Connect {
             verbose: client.opts.verbose,
             pedantic: client.opts.pedantic,
             tls_required: client.opts.tls_required,
-            auth_token: client.opts.auth_token.clone(),
-            user: client.opts.username.clone(),
-            pass: client.opts.password.clone(),
-            name: client.opts.name.clone(),
+            auth_token: Some(client.opts.auth_token.clone()).filter(not_empty),
+            user: Some(client.opts.username.clone()).filter(not_empty),
+            pass: Some(client.opts.password.clone()).filter(not_empty),
+            name: Some(client.opts.name.clone()).filter(not_empty),
             lang: "rust".to_string(),
             version: "0.2.0".to_string(),
             protocol: 1,

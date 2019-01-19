@@ -19,13 +19,13 @@ fn test_stan_pub_sub() {
     let mut runtime = Runtime::new().unwrap();
 
     let nats_options = NatsClientOptions::builder()
-        .cluster_uris(vec!(String::from("127.0.0.1:4222")))
+        .cluster_uris("127.0.0.1:4222")
         .build()
         .unwrap();
     let stan_options = StanOptions::builder()
         .nats_options(nats_options)
-        .cluster_id("test-cluster".into())
-        .client_id("main-1".into()).build()
+        .cluster_id("test-cluster")
+        .client_id("main-1").build()
         .unwrap();
     let (result_tx, result_rx) = mpsc::unbounded();
 

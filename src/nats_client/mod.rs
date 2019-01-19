@@ -66,16 +66,55 @@ pub struct NatsClientMultiplexer {
     subs_map: Arc<RwLock<HashMap<String, SubscriptionSink>>>,
 }
 
+/// UriVec allows ergonomic use of NatsClientOptions.
+/// ``` rust
+/// ratsio::prelude::NatsClientOptions::builder()
+///    .cluster_uris("localhost:4222")
+///    .build();
+/// ```
+/// or
+/// ``` rust
+/// ratsio::prelude::NatsClientOptions::builder()
+///    .cluster_uris(vec!("localhost:4222", "other_location:4222"))
+///    .build();
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct UriVec(Vec<String>);
+
+impl From<Vec<&str>> for UriVec {
+    fn from(xs: Vec<&str>) -> Self {
+        UriVec(xs.into_iter().map(|x| x.into()).collect())
+    }
+}
+
+impl From<Vec<String>> for UriVec {
+    fn from(xs: Vec<String>) -> Self {
+        UriVec(xs)
+    }
+}
+
+impl From<String> for UriVec {
+    fn from(x: String) -> Self {
+        UriVec(vec!(x))
+    }
+}
+
+impl From<&str> for UriVec {
+    fn from(x: &str) -> Self {
+        UriVec(vec!(x.to_owned()))
+    }
+}
+
 /// Options that are to be given to the client for initialization
 #[derive(Debug, Clone, Builder, PartialEq)]
 #[builder(setter(into), default)]
 pub struct NatsClientOptions {
     /// Cluster username, can be overwritten by host url nats://<username>:<password>@<host>:<port>
-    pub username: Option<String>,
+    pub username: String,
     /// Cluster password, can be overwritten by host url nats://<username>:<password>@<host>:<port>
-    pub password: Option<String>,
+    pub password: String,
     /// Cluster auth_token
-    pub auth_token: Option<String>,
+    pub auth_token: String,
     /// Whether TLS is required.
     pub tls_required: bool,
     /// verbosity, default true
@@ -85,11 +124,10 @@ pub struct NatsClientOptions {
     /// pedantic, default true
     pub echo: bool,
     /// Optional client name
-    pub name: Option<String>,
-
+    pub name: String,
 
     /// Cluster URI in the IP:PORT format
-    pub cluster_uris: Vec<String>,
+    pub cluster_uris: UriVec,
 
     /// Ping interfval in seconds
     pub ping_interval: u16,
@@ -109,15 +147,15 @@ pub struct NatsClientOptions {
 impl Default for NatsClientOptions {
     fn default() -> Self {
         NatsClientOptions {
-            username: None,
-            password: None,
+            username: String::new(),
+            password: String::new(),
             tls_required: false,
-            auth_token: None,
+            auth_token: String::new(),
             verbose: true,
             pedantic: false,
             echo: true,
-            name: None,
-            cluster_uris: Vec::new(),
+            name: String::new(),
+            cluster_uris: UriVec(Vec::new()),
             ping_interval: 5,
             ping_max_out: 3,
             subscribe_on_reconnect: true,

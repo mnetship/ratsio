@@ -131,16 +131,39 @@ Subscribing and Publishing to a NATS streaming subject: see tests/stan_client_te
 ```
 #  Important Changes
 
-## Version 0.2
+### Version 0.2
 Users no longer need to use ratsio::ops::Connect struct when configuring a connection. Options are now availabble
 on NatsClientOptions, username, password, tls_required, auth_token, etc
 
 For example
 ``` rust
     let nats_options = NatsClientOptions::builder()
-        .username("user".to_string())
-        .password("password".to_string())
-        .cluster_uris(vec!("127.0.0.1:4222".to_string()))
+        .username("user")
+        .password("password")
+        .cluster_uris(vec!("127.0.0.1:4222"))
+        .build()
+        .unwrap();
+```
+
+### Version 0.2.1
+More ergonomics when creating options. A bit easier on the eye.
+
+It is now possible to pass either of String, &str, Vec<String> or Vec<&str> to cluster_uris(...) on NatsClientOptions::builder(), use
+```rust use ratsio::prelude::VecUri;``` or just ```rust use ratsio::prelude::*;```
+``` rust
+    let nats_options = NatsClientOptions::builder()
+        .username("user")
+        .password("password")
+        .cluster_uris(vec!("127.0.0.1:4222"))
+        .build()
+        .unwrap();
+```
+or
+``` rust
+    let nats_options = NatsClientOptions::builder()
+        .username("user")
+        .password("password")
+        .cluster_uris("127.0.0.1:4222") // For 1 url
         .build()
         .unwrap();
 ```

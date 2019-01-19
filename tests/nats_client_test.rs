@@ -22,8 +22,8 @@ fn test_pub_sub() {
 
     let mut runtime = Runtime::new().unwrap();
     let options = NatsClientOptions::builder()
-        .username("".to_string())
-        .cluster_uris(vec!(String::from("localhost:4222")))
+        .username("")
+        .cluster_uris("localhost:4222")
         .build()
         .unwrap();
 
@@ -61,7 +61,7 @@ fn test_connect() {
     common::setup();
     let mut runtime = Runtime::new().unwrap();
     let options = NatsClientOptions::builder()
-        .cluster_uris(vec!(String::from("127.0.0.1:4222")))
+        .cluster_uris(vec!("127.0.0.1:4222", "192.168.0.253:4222"))
         .build()
         .unwrap();
 
