@@ -1,24 +1,18 @@
 use crate::error::RatsioError;
 use crate::net::*;
-use crate::ops::{Connect, Message, Op,  ServerInfo, Subscribe, };
+use crate::ops::{Connect, Message, Op, ServerInfo, Subscribe};
 use futures::{
-    Future,
     prelude::*,
     stream,
-    Stream,
-    sync::{
-        mpsc::{self, UnboundedSender},
-    },
+    sync::mpsc::{self, UnboundedSender},
+    Future, Stream,
 };
 use parking_lot::RwLock;
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use std::fmt::Debug;
+use std::{collections::HashMap, sync::Arc};
 
 type NatsSink = stream::SplitSink<NatsConnSinkStream>;
 type NatsStream = stream::SplitStream<NatsConnSinkStream>;
-
 
 mod client;
 
@@ -37,7 +31,7 @@ impl NatsClientSender {
         NatsClientSender { tx }
     }
     /// Sends an OP to the server
-    pub fn send(&self, op: Op) -> impl Future<Item=(), Error=RatsioError> {
+    pub fn send(&self, op: Op) -> impl Future<Item = (), Error = RatsioError> {
         //let _verbose = self.verbose.clone();
         self.tx
             .unbounded_send(op)
@@ -95,13 +89,47 @@ impl From<Vec<String>> for UriVec {
 
 impl From<String> for UriVec {
     fn from(x: String) -> Self {
-        UriVec(vec!(x))
+        UriVec(vec![x])
     }
 }
 
 impl From<&str> for UriVec {
     fn from(x: &str) -> Self {
-        UriVec(vec!(x.to_owned()))
+        UriVec(vec![x.to_owned()])
+    }
+}
+
+/// An alias representing the requirements for the nonce signing callback function
+pub type SignerCallback =
+    Arc<Fn(&[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> + Send + Sync>;
+
+/// An option that indicates client JWT authentication should be used. Takes a callback that
+/// will be used to sign the nonce the server supplies. For security reasons, ensure that
+/// you keep the seed in memory only as long as is necessary. Because of the tokio wrappings
+/// used by this client, the callback must be wrapped in an Arc of the signer callback function type.
+#[derive(Clone)]
+pub struct UserJWT {
+    jwt: String,
+    signer: SignerCallback,
+}
+
+impl Debug for UserJWT {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "UserJWT {{ jwt: {}, signer: (func) }}", self.jwt)
+    }
+}
+
+impl PartialEq for UserJWT {
+    fn eq(&self, other: &UserJWT) -> bool {
+        self.jwt == other.jwt
+    }
+}
+
+impl UserJWT {
+    /// Creates a new UserJWT option from an encoded JWT and a callback to be invoked to sign
+    /// the server-provided nonce
+    pub fn new(jwt: String, signer: SignerCallback) -> UserJWT {
+        UserJWT { jwt, signer }
     }
 }
 
@@ -140,9 +168,9 @@ pub struct NatsClientOptions {
     pub ensure_connect: bool,
     /// Time between connection retries
     pub reconnect_timeout: u64,
+    /// When using NATS 2.x decentralized security, supply a user JWT for authN/authZ
+    pub user_jwt: Option<UserJWT>,
 }
-
-
 
 impl Default for NatsClientOptions {
     fn default() -> Self {
@@ -161,6 +189,7 @@ impl Default for NatsClientOptions {
             subscribe_on_reconnect: true,
             ensure_connect: true,
             reconnect_timeout: 1000,
+            user_jwt: None,
         }
     }
 }
@@ -173,6 +202,7 @@ impl NatsClientOptions {
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum NatsClientState {
+    Connecting,
     Connected,
     Reconnecting,
     Disconnected,
@@ -190,7 +220,7 @@ pub struct NatsClient {
     /// Server info
     server_info: Arc<RwLock<Option<ServerInfo>>>,
     /// Stream of the messages that are not caught for subscriptions (only system messages like PING/PONG should be here)
-    unsub_receiver: Box<dyn Stream<Item=Op, Error=RatsioError> + Send + Sync>,
+    unsub_receiver: Box<dyn Stream<Item = Op, Error = RatsioError> + Send + Sync>,
     /// Sink part to send commands
     pub sender: Arc<RwLock<NatsClientSender>>,
     /// Subscription multiplexer
@@ -201,7 +231,6 @@ pub struct NatsClient {
 
     state: Arc<RwLock<NatsClientState>>,
     reconnect_handlers: Arc<RwLock<HandlerMap>>,
-
 }
 
 impl ::std::fmt::Debug for NatsClient {
@@ -220,6 +249,8 @@ impl Stream for NatsClient {
     type Item = Op;
 
     fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
-        self.unsub_receiver.poll().map_err(|_| RatsioError::InnerBrokenChain)
+        self.unsub_receiver
+            .poll()
+            .map_err(|_| RatsioError::InnerBrokenChain)
     }
 }

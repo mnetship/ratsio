@@ -17,7 +17,8 @@ Rust -stable, -beta and -nightly are supported.
 - [x] Nats cluster support, auto reconnect and dynamic cluster hosts update.
 - [x] Async from the ground up, using  [tokio](https://crates.io/crates/tokio) and [futures](https://crates.io/crates/futures).
 - [x] TLS mode
-- [x] Authentication
+- [x] NATS 1.x Authentication
+- [x] NATS 2.0 JWT-based client authentication
 - [x] NATS Streaming Server
 # Usage
 
@@ -168,6 +169,43 @@ or
         .build()
         .unwrap();
 ```
+
+# Version 0.3.0 
+Merged the `from_options` and `connect` methods because `from_options` was actually making a TCP connection, and so its 
+name was misleading. Further, the new client now properly awaits the `INFO` pre-amble from the server before supplying the 
+`CONNECT` message.
+
+Added support for NATS 2.0 client authentication via JWTs and [nkeys](https://github.com/nats-io/nkeys). You can now pass a 
+`UserJWT` option along with a callback used to sign a `nonce` (a small random string the server uses to verify that the client
+does possess the private key), as shown in the following example:
+
+```rust
+    let raw_jwt = String::from("--Encoded JWT goes here--");
+    let opt_jwt = UserJWT::new(raw_jwt, Arc::new(sign_nonce));
+    
+    let mut runtime = Runtime::new().unwrap();
+    let options = NatsClientOptions::builder()
+        .cluster_uris(vec!["127.0.0.1:4222"])
+        .user_jwt(opt_jwt)
+        .build()
+        .unwrap();
+
+    let client = NatsClient::connect(options);
+```
+
+And here's what a sample `sign_nonce` function looks like:
+
+```rust
+fn sign_nonce(nonce: &[u8]) -> Result<Vec<u8>, Box<std::error::Error>> { 
+    let raw_nkey = "--secret/seed key goes here--";
+    let kp = nkeys::KeyPair::from_seed(raw_nkey).unwrap();
+    Ok(kp.sign(nonce).unwrap())
+}
+```
+
+At the moment, you have to define your own callback to ensure that your code can manage the lifetime of the seed key in a 
+way that is hopefully short-lived. If the NATS client library managed your seed key lifetime, it would have to enforce a
+`'static` guarantee, which isn't the most secure approach.
 
 # Contact
 For bug reports, patches, feature requests or other messages, please send a mail to michael@zulzi.com
