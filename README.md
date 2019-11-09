@@ -168,6 +168,9 @@ or
         .build()
         .unwrap();
 ```
+### Version 0.2.2
+Bug fixes: 
+ 1. Send connect op when reconnecting, thanks to David McNeil
 
 # Contact
 For bug reports, patches, feature requests or other messages, please send a mail to michael@zulzi.com
