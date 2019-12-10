@@ -1,10 +1,10 @@
 [package]
 name = "ratsio"
-version = "0.2.2"
+version = "0.3.0"
 readme = "README.md"
 authors = ["Michael Netshipise <michael@zulzi.com>"]
 description = "Ratsio is a Rust client library for NATS messaging system and NATS Event Streaming."
-#documentation = "https://docs.rs/ratsio"
+documentation = "https://docs.rs/ratsio"
 categories = [
     "network-programming",
     "web-programming",
@@ -42,3 +42,6 @@ regex               = "^1"
 sha2                = "^0.8"
 atomic-counter      = "^1.0"
 lazy_static         = "^1.2"
+nkeys               = "^0.0.3"
+data-encoding       = "^2.1.2"
+

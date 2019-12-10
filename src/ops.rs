@@ -1,9 +1,8 @@
+use crate::error::RatsioError;
+use crate::nuid::NUID;
 use bytes::{BufMut, Bytes, BytesMut};
 use std::collections::HashMap;
 use std::convert::From;
-use crate::error::RatsioError;
-use crate::nuid::NUID;
-
 
 #[derive(Debug, PartialEq)]
 pub enum JsonValue {
@@ -15,77 +14,61 @@ pub enum JsonValue {
 }
 
 macro_rules! get_json_string {
-    ($obj:expr, $key:expr, $default:expr) => {
-     {
+    ($obj:expr, $key:expr, $default:expr) => {{
         match $obj.get($key) {
             Some(JsonValue::String(s)) => s.to_owned(),
             _ => $default,
         }
-     }
-    };
+    }};
 
-    ($obj:expr, $key:expr) => {
-     {
+    ($obj:expr, $key:expr) => {{
         match $obj.get($key) {
             Some(JsonValue::String(s)) => s.to_owned(),
             _ => String::from(""),
         }
-     }
-    };
+    }};
 }
 
 macro_rules! get_json_opt_string {
-    ($obj:expr, $key:expr) => {
-     {
+    ($obj:expr, $key:expr) => {{
         match $obj.get($key) {
             Some(JsonValue::String(s)) => Some(s.to_owned()),
             _ => None,
         }
-     }
-    };
+    }};
 }
 
 macro_rules! get_json_number {
-    ($obj:expr, $key:expr, $default:expr, $t:ty) => {
-     {
+    ($obj:expr, $key:expr, $default:expr, $t:ty) => {{
         match $obj.get($key) {
             Some(JsonValue::Number(f)) => *f as $t,
             _ => $default as $t,
         }
-     }
-    };
+    }};
 
-    ($obj:expr, $key:expr, $t:ty) => {
-     {
+    ($obj:expr, $key:expr, $t:ty) => {{
         match $obj.get($key) {
             Some(JsonValue::Number(f)) => *f as $t,
-            _ => 0 as $t ,
+            _ => 0 as $t,
         }
-     }
-    };
+    }};
 }
 
 macro_rules! get_json_boolean {
-    ($obj:expr, $key:expr, $default:expr) => {
-     {
+    ($obj:expr, $key:expr, $default:expr) => {{
         match $obj.get($key) {
             Some(JsonValue::Boolean(b)) => *b,
             _ => $default,
         }
-     }
-    };
+    }};
 
-    ($obj:expr, $key:expr) => {
-     {
+    ($obj:expr, $key:expr) => {{
         match $obj.get($key) {
             Some(JsonValue::Boolean(b)) => *b,
             _ => false,
         }
-     }
-    };
+    }};
 }
-
-
 
 /// INFO from nats.io server {["option_name":option_value],...}
 ///
@@ -120,8 +103,8 @@ pub struct ServerInfo {
     pub tls_verify: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub connect_urls: Vec<String>,
+    pub nonce: String,
 }
-
 
 impl Default for ServerInfo {
     fn default() -> Self {
@@ -138,6 +121,7 @@ impl Default for ServerInfo {
             tls_required: false,
             tls_verify: false,
             connect_urls: Vec::new(),
+            nonce: "".to_string(),
         }
     }
 }
@@ -147,12 +131,13 @@ impl From<JsonValue> for ServerInfo {
         match value {
             JsonValue::Object(obj) => {
                 let connect_urls: Vec<String> = match obj.get("connect_urls") {
-                    Some(JsonValue::Array(arr)) => arr.into_iter().filter_map(|v| {
-                        match v {
+                    Some(JsonValue::Array(arr)) => arr
+                        .into_iter()
+                        .filter_map(|v| match v {
                             JsonValue::String(s) => Some(s.to_owned()),
-                            _ => None
-                        }
-                    }).collect(),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => Vec::new(),
                 };
                 ServerInfo {
@@ -168,6 +153,7 @@ impl From<JsonValue> for ServerInfo {
                     tls_required: get_json_boolean!(obj, "tls_required", false),
                     tls_verify: get_json_boolean!(obj, "tls_verify", false),
                     connect_urls,
+                    nonce: get_json_string!(obj, "nonce"),
                 }
             }
             _ => ServerInfo::default(),
@@ -189,6 +175,8 @@ impl From<JsonValue> for ServerInfo {
 /// * name: Optional client name
 /// * lang: The implementation language of the client.
 /// * version: The version of the client.
+/// * jwt: If using User JWT credentials, this contains an encoded JWT for the user
+/// * sig: A signature produced from the nonce the server sent with its INFO message (if using JWT security)
 /// * protocol: optional int. Sending 0 (or absent) indicates client supports original protocol. Sending 1 indicates that the client supports dynamic reconfiguration of cluster topology changes by asynchronously receiving INFO messages with known servers it can reconnect to.
 /// * echo: Optional boolean. If set to true, the server (version 1.2.0+) will not send originating messages from this connection to its own subscriptions. Clients should set this to true only for server supporting this feature, which is when proto in the INFO protocol is set to at least 1.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Builder)]
@@ -210,10 +198,14 @@ pub struct Connect {
     pub version: String,
     pub protocol: u32,
     pub echo: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jwt: Option<String>,
 }
 
 impl Connect {
-       pub fn builder() -> ConnectBuilder {
+    pub fn builder() -> ConnectBuilder {
         ConnectBuilder::default()
     }
 }
@@ -231,6 +223,8 @@ impl Default for Connect {
             version: "0.2.0".into(),
             protocol: 1,
             echo: true,
+            sig: None,
+            jwt: None,
         }
     }
 }
@@ -238,21 +232,21 @@ impl Default for Connect {
 impl From<JsonValue> for Connect {
     fn from(value: JsonValue) -> Self {
         match value {
-            JsonValue::Object(obj) => {
-                Connect {
-                    verbose: get_json_boolean!(obj, "verbose",  true),
-                    pedantic: get_json_boolean!(obj, "pedantic",  false),
-                    tls_required: get_json_boolean!(obj, "tls_required", false),
-                    auth_token: get_json_opt_string!(obj, "auth_token"),
-                    user: get_json_opt_string!(obj, "user"),
-                    pass: get_json_opt_string!(obj, "pass"),
-                    name: get_json_opt_string!(obj, "name"),
-                    lang: get_json_string!(obj, "lang"),
-                    version: get_json_string!(obj, "version"),
-                    protocol: get_json_number!(obj, "protocol", 0, u32),
-                    echo: get_json_boolean!(obj, "tls_verify", true),
-                }
-            }
+            JsonValue::Object(obj) => Connect {
+                verbose: get_json_boolean!(obj, "verbose", true),
+                pedantic: get_json_boolean!(obj, "pedantic", false),
+                tls_required: get_json_boolean!(obj, "tls_required", false),
+                auth_token: get_json_opt_string!(obj, "auth_token"),
+                user: get_json_opt_string!(obj, "user"),
+                pass: get_json_opt_string!(obj, "pass"),
+                name: get_json_opt_string!(obj, "name"),
+                lang: get_json_string!(obj, "lang"),
+                version: get_json_string!(obj, "version"),
+                protocol: get_json_number!(obj, "protocol", 0, u32),
+                echo: get_json_boolean!(obj, "tls_verify", true),
+                sig: get_json_opt_string!(obj, "sig"),
+                jwt: get_json_opt_string!(obj, "jwt"),
+            },
             _ => Connect::default(),
         }
     }
@@ -280,10 +274,13 @@ pub struct Message {
 use ::std::fmt;
 impl fmt::Debug for Message {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Message {{ subject: {}, sid: {}, reply_to: {:?} }}", self.subject, self.sid, self.reply_to)
+        write!(
+            f,
+            "Message {{ subject: {}, sid: {}, reply_to: {:?} }}",
+            self.subject, self.sid, self.reply_to
+        )
     }
 }
-
 
 impl Default for Message {
     fn default() -> Self {
@@ -295,7 +292,6 @@ impl Default for Message {
         }
     }
 }
-
 
 #[derive(Clone, Debug, PartialEq, Builder)]
 #[builder(default)]
@@ -325,8 +321,6 @@ impl Default for Publish {
     }
 }
 
-
-
 #[derive(Clone, Debug, PartialEq, Builder)]
 #[builder(default)]
 pub struct Subscribe {
@@ -354,13 +348,11 @@ impl Subscribe {
     }
 }
 
-
 #[derive(Clone, Debug, PartialEq, Builder)]
 #[builder(default)]
 pub struct UnSubscribe {
     pub sid: String,
     pub max_msgs: Option<u32>,
-
 }
 
 impl UnSubscribe {
@@ -404,7 +396,6 @@ pub enum Op {
     UNSUB(UnSubscribe),
     CLOSE,
 }
-
 
 #[inline]
 fn extend_bytes<'a>(dst: &'a mut BytesMut, s: &[u8]) {
@@ -485,7 +476,10 @@ impl Op {
                     extend_bytes(&mut dst, &b"\t"[..]);
                     extend_bytes(&mut dst, reply_to.as_bytes());
                 }
-                extend_bytes(&mut dst, format!("\t{}\r\n", publish.payload.len()).as_bytes());
+                extend_bytes(
+                    &mut dst,
+                    format!("\t{}\r\n", publish.payload.len()).as_bytes(),
+                );
                 extend_bytes(&mut dst, &publish.payload[..]);
                 extend_bytes(&mut dst, &b"\r\n"[..]);
                 Ok(dst.freeze())
@@ -522,7 +516,6 @@ impl Op {
         }
     }
 }
-
 
 #[test]
 fn ser_ok() {
@@ -574,7 +567,11 @@ fn ser_connect() {
         pass: None,
         auth_token: None,
         echo: true,
-    }).into_bytes() {
+        sig: None,
+        jwt: None,
+    })
+    .into_bytes()
+    {
         Ok(b) => {
             //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
             let c = format!("CONNECT\t{}\r\n", r#"{"verbose":false,"pedantic":false,"tls_required":false,"name":"","lang":"go","version":"1.2.2","protocol":1,"echo":true}"#);
@@ -586,7 +583,6 @@ fn ser_connect() {
     }
 }
 
-
 #[test]
 fn ser_message() {
     match Op::MSG(Message {
@@ -594,7 +590,9 @@ fn ser_message() {
         sid: String::from("9"),
         reply_to: Some(String::from("INBOX.34")),
         payload: Vec::from(b"Hello World" as &[u8]),
-    }).into_bytes() {
+    })
+    .into_bytes()
+    {
         Ok(b) => {
             //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
             let c = format!("MSG\tFOO.BAR\t9\tINBOX.34\t11\r\n{}\r\n", r#"Hello World"#);
@@ -613,7 +611,9 @@ fn ser_message_no_reply() {
         sid: String::from("9"),
         reply_to: None,
         payload: Vec::from(b"Hello New World" as &[u8]),
-    }).into_bytes() {
+    })
+    .into_bytes()
+    {
         Ok(b) => {
             //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
             let c = format!("MSG\tFOO.BAR\t9\t15\r\n{}\r\n", r#"Hello New World"#);
@@ -631,10 +631,15 @@ fn ser_publish() {
         subject: String::from("FRONT.DOOR"),
         reply_to: Some(String::from("INBOX.22")),
         payload: Vec::from(b"Knock Knock" as &[u8]),
-    }).into_bytes() {
+    })
+    .into_bytes()
+    {
         Ok(b) => {
             //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
-            assert_eq!(&b[..], &b"PUB\tFRONT.DOOR\tINBOX.22\t11\r\nKnock Knock\r\n"[..]);
+            assert_eq!(
+                &b[..],
+                &b"PUB\tFRONT.DOOR\tINBOX.22\t11\r\nKnock Knock\r\n"[..]
+            );
         }
         Err(_) => {
             assert!(false);
@@ -642,14 +647,15 @@ fn ser_publish() {
     }
 }
 
-
 #[test]
 fn ser_publish_no_reply() {
     match Op::PUB(Publish {
         subject: String::from("FRONT.DOOR"),
         reply_to: None,
         payload: Vec::from(b"Knock Knock Again" as &[u8]),
-    }).into_bytes() {
+    })
+    .into_bytes()
+    {
         Ok(b) => {
             //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
             assert_eq!(&b[..], &b"PUB\tFRONT.DOOR\t17\r\nKnock Knock Again\r\n"[..]);
@@ -660,14 +666,15 @@ fn ser_publish_no_reply() {
     }
 }
 
-
 #[test]
 fn ser_sub() {
     match Op::SUB(Subscribe {
         subject: String::from("BAR"),
         sid: String::from("44"),
         queue_group: Some(String::from("G1")),
-    }).into_bytes() {
+    })
+    .into_bytes()
+    {
         Ok(b) => {
             //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
             assert_eq!(&b[..], &b"SUB\tBAR\tG1\t44\r\n"[..]);
@@ -678,14 +685,15 @@ fn ser_sub() {
     }
 }
 
-
 #[test]
 fn ser_sub_no_group() {
     match Op::SUB(Subscribe {
         subject: String::from("BAR"),
         sid: String::from("44"),
         queue_group: None,
-    }).into_bytes() {
+    })
+    .into_bytes()
+    {
         Ok(b) => {
             //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
             assert_eq!(&b[..], &b"SUB\tBAR\t44\r\n"[..]);
@@ -696,13 +704,14 @@ fn ser_sub_no_group() {
     }
 }
 
-
 #[test]
 fn ser_unsub() {
     match Op::UNSUB(UnSubscribe {
         sid: String::from("44234535"),
         max_msgs: Some(500),
-    }).into_bytes() {
+    })
+    .into_bytes()
+    {
         Ok(b) => {
             //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
             assert_eq!(&b[..], &b"UNSUB\t44234535\t500\r\n"[..]);
@@ -718,7 +727,9 @@ fn ser_unsub_no_max() {
     match Op::UNSUB(UnSubscribe {
         sid: String::from("44234535"),
         max_msgs: None,
-    }).into_bytes() {
+    })
+    .into_bytes()
+    {
         Ok(b) => {
             //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
             assert_eq!(&b[..], &b"UNSUB\t44234535\r\n"[..]);

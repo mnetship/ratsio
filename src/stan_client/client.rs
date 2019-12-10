@@ -1,28 +1,25 @@
+use super::*;
 use crate::error::RatsioError;
 use crate::nats_client::NatsClient;
 use crate::nuid::NUID;
 use crate::ops::{Publish, Subscribe};
 use crate::protocol::{
-    Ack, CloseRequest, ConnectRequest, ConnectResponse,
-    PubMsg, SubscriptionRequest,
+    Ack, CloseRequest, ConnectRequest, ConnectResponse, PubMsg, SubscriptionRequest,
     SubscriptionResponse,
 };
 use futures::{
-    future::{self, Either}, Future,
+    future::{self, Either},
     stream::Stream,
     sync::mpsc,
+    Future,
 };
 use parking_lot::RwLock;
-use protobuf::{Message as ProtoMessage, parse_from_bytes};
+use protobuf::{parse_from_bytes, Message as ProtoMessage};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    sync::{
-        Arc,
-        atomic::AtomicBool,
-    },
+    sync::{atomic::AtomicBool, Arc},
 };
-use super::*;
 
 impl Into<ClientInfo> for ConnectResponse {
     fn into(self) -> ClientInfo {
@@ -37,9 +34,10 @@ impl Into<ClientInfo> for ConnectResponse {
     }
 }
 
-
 impl StanClient {
-    pub fn from_options(options: StanOptions) -> impl Future<Item=Arc<Self>, Error=RatsioError> {
+    pub fn from_options(
+        options: StanOptions,
+    ) -> impl Future<Item = Arc<Self>, Error = RatsioError> {
         let id_generator = Arc::new(RwLock::new({
             let mut id_gen = NUID::new();
             id_gen.randomize_prefix();
@@ -48,39 +46,42 @@ impl StanClient {
         let conn_id = id_generator.write().next();
         debug!(target: "ratsio", "Connection id => {}", &conn_id);
         let heartbeat_inbox: String = format!("_HB.{}", id_generator.write().next());
-        let discover_subject: String = format!("{}.{}", DEFAULT_DISCOVER_PREFIX, options.cluster_id);
+        let discover_subject: String =
+            format!("{}.{}", DEFAULT_DISCOVER_PREFIX, options.cluster_id);
         let client_id = options.client_id.clone();
 
         let mut nats_options = options.nats_options.clone();
         nats_options.name = client_id.clone();
         nats_options.subscribe_on_reconnect = false;
-        NatsClient::from_options(nats_options.clone())
-            .and_then(|client| {
-                debug!(target: "ratsio", "Connecting NATS client");
-                NatsClient::connect(&client)
-            })
-            .and_then(move |nats_client: Arc<NatsClient>| {
-                debug!(target: "ratsio", "Got NATS client");
-                let mut connect_request = ConnectRequest::new();
-                connect_request.set_clientID(client_id.clone());
-                connect_request.set_connID(conn_id.clone().into_bytes());
-                connect_request.set_heartbeatInbox(heartbeat_inbox.clone());
+        NatsClient::connect(nats_options.clone()).and_then(move |nats_client: Arc<NatsClient>| {
+            debug!(target: "ratsio", "Got NATS client");
+            let mut connect_request = ConnectRequest::new();
+            connect_request.set_clientID(client_id.clone());
+            connect_request.set_connID(conn_id.clone().into_bytes());
+            connect_request.set_heartbeatInbox(heartbeat_inbox.clone());
 
-                debug!(target: "ratsio", "Connecting STAN Client");
-                let connect_payload = ProtoMessage::write_to_bytes(&connect_request).unwrap();
-                let (tx, rx) = mpsc::unbounded::<String>();
+            debug!(target: "ratsio", "Connecting STAN Client");
+            let connect_payload = ProtoMessage::write_to_bytes(&connect_request).unwrap();
+            let (tx, rx) = mpsc::unbounded::<String>();
 
-                debug!(target: "ratsio", "Subscibing to STAN Client heartbeats");
-                StanClient::process_heartbeats(
-                    id_generator.clone(), &conn_id, &client_id, &heartbeat_inbox, nats_client.clone());
+            debug!(target: "ratsio", "Subscibing to STAN Client heartbeats");
+            StanClient::process_heartbeats(
+                id_generator.clone(),
+                &conn_id,
+                &client_id,
+                &heartbeat_inbox,
+                nats_client.clone(),
+            );
 
-                let recon_discover_subject = discover_subject.clone();
-                debug!(target: "ratsio", "Issuing STAN join request");
-                //TODO add a timeout for cases where the STAN server does not reply.
-                nats_client.request(discover_subject, &connect_payload).map(move |response| {
-                    let connect_response = parse_from_bytes::<ConnectResponse>(
-                        &response.payload[..]).unwrap();
-                    let client_info : ClientInfo= connect_response.clone().into();
+            let recon_discover_subject = discover_subject.clone();
+            debug!(target: "ratsio", "Issuing STAN join request");
+            //TODO add a timeout for cases where the STAN server does not reply.
+            nats_client
+                .request(discover_subject, &connect_payload)
+                .map(move |response| {
+                    let connect_response =
+                        parse_from_bytes::<ConnectResponse>(&response.payload[..]).unwrap();
+                    let client_info: ClientInfo = connect_response.clone().into();
                     let stan_client = Arc::new(StanClient {
                         //subs_tx: Arc::new(RwLock::new(HashMap::default())),
                         options: StanOptions {
@@ -109,16 +110,21 @@ impl StanClient {
                     let unsub_cb_stan_client = stan_client.clone();
                     tokio::spawn(rx.for_each(move |sub_id| {
                         debug!(target: "ratsio", "unsubscribing => {} ", sub_id);
-                        unsub_cb_stan_client.subscriptions.write().remove(&sub_id[..]);
+                        unsub_cb_stan_client
+                            .subscriptions
+                            .write()
+                            .remove(&sub_id[..]);
                         Ok(())
                     }));
 
-                    StanClient::register_reconnect_handler(stan_client.clone(),
-                                                           recon_discover_subject.clone());
+                    StanClient::register_reconnect_handler(
+                        stan_client.clone(),
+                        recon_discover_subject.clone(),
+                    );
 
                     stan_client
                 })
-            })
+        })
     }
 
     fn register_reconnect_handler(stan_client: Arc<StanClient>, discover_subject: String) {
@@ -202,13 +208,20 @@ impl StanClient {
         }));
     }
 
-    fn process_heartbeats(id_generator: Arc<RwLock<NUID>>, conn_id: &str,
-                          client_id: &str, heartbeat_inbox: &str,
-                          nats_client: Arc<NatsClient>) {
+    fn process_heartbeats(
+        id_generator: Arc<RwLock<NUID>>,
+        conn_id: &str,
+        client_id: &str,
+        heartbeat_inbox: &str,
+        nats_client: Arc<NatsClient>,
+    ) {
         let hb_conn_id = conn_id.to_string();
         let hb_client_id = client_id.to_string();
         debug!(target: "ratsio", "Subscribing to heartbeat => {}", &heartbeat_inbox);
-        let sub = Subscribe::builder().subject(heartbeat_inbox.to_string()).build().unwrap();
+        let sub = Subscribe::builder()
+            .subject(heartbeat_inbox.to_string())
+            .build()
+            .unwrap();
         tokio::spawn(nats_client.clone().subscribe(sub)
             .and_then(|stream| {
                 stream
@@ -276,8 +289,10 @@ impl StanClient {
         &self,
         subscribe: StanSubscribe,
         handler: T,
-    ) -> impl Future<Item=String, Error=RatsioError>
-        where T: Into<SubscriptionHandler> {
+    ) -> impl Future<Item = String, Error = RatsioError>
+    where
+        T: Into<SubscriptionHandler>,
+    {
         let subscription_id = self.id_generator.write().next();
         self.subscribe_inner(subscribe, subscription_id, Arc::new(handler.into()))
     }
@@ -287,7 +302,7 @@ impl StanClient {
         subscribe: StanSubscribe,
         subscription_id: String,
         handler: Arc<SubscriptionHandler>,
-    ) -> impl Future<Item=String, Error=RatsioError> {
+    ) -> impl Future<Item = String, Error = RatsioError> {
         let inbox: String = format!("_SUB.{}", self.id_generator.write().next());
 
         let subs_nats_client = self.nats_client.clone();
@@ -299,10 +314,12 @@ impl StanClient {
         let unsub_tx = self.unsub_tx.clone();
 
         let payload = self.sub_request_payload(&subscribe, &inbox);
-        self.nats_client.clone().request(self.client_info.read().sub_requests.clone(), &payload)
+        self.nats_client
+            .clone()
+            .request(self.client_info.read().sub_requests.clone(), &payload)
             .and_then(move |sub_response| {
-                let sub_response = parse_from_bytes::<SubscriptionResponse>(
-                    &sub_response.payload[..]).unwrap();
+                let sub_response =
+                    parse_from_bytes::<SubscriptionResponse>(&sub_response.payload[..]).unwrap();
 
                 let sub = Subscribe::builder().subject(inbox.clone()).build().unwrap();
                 subs_nats_client.subscribe(sub).and_then(move |stream| {
@@ -318,25 +335,37 @@ impl StanClient {
                         is_closed: AtomicBool::new(false),
                         unsub_tx,
                         handler,
-                    }.start(Box::new(stream));
-                    subscriptions.write().insert(subscription_id.clone(), subscription.clone());
+                    }
+                    .start(Box::new(stream));
+                    subscriptions
+                        .write()
+                        .insert(subscription_id.clone(), subscription.clone());
                     future::ok(subscription_id)
                 })
             })
     }
 
-    fn ack_message(&self, ack_inbox: String, subject: String, sequence: u64) -> impl Future<Item=(), Error=RatsioError> {
+    fn ack_message(
+        &self,
+        ack_inbox: String,
+        subject: String,
+        sequence: u64,
+    ) -> impl Future<Item = (), Error = RatsioError> {
         let mut ack_request = Ack::new();
         ack_request.set_subject(subject);
         ack_request.set_sequence(sequence);
         let buf = ProtoMessage::write_to_bytes(&ack_request).unwrap();
-        self.nats_client.publish(Publish::builder()
-            .payload(Vec::from(&buf[..]))
-            .subject(ack_inbox).build().unwrap())
+        self.nats_client.publish(
+            Publish::builder()
+                .payload(Vec::from(&buf[..]))
+                .subject(ack_inbox)
+                .build()
+                .unwrap(),
+        )
     }
 
     /// Sends an OP to the server
-    pub fn send(&self, message: StanMessage) -> impl Future<Item=(), Error=RatsioError> {
+    pub fn send(&self, message: StanMessage) -> impl Future<Item = (), Error = RatsioError> {
         let mut pub_msg = PubMsg::new();
         let mut hasher = Sha256::new();
         hasher.input(&message.payload[..]);
@@ -357,25 +386,35 @@ impl StanClient {
 
         let payload = ProtoMessage::write_to_bytes(&pub_msg).unwrap();
         let publ = Publish::builder()
-            .subject(format!("{}.{}", self.client_info.read().pub_prefix, message.subject))
-            .payload(payload).build().unwrap();
+            .subject(format!(
+                "{}.{}",
+                self.client_info.read().pub_prefix,
+                message.subject
+            ))
+            .payload(payload)
+            .build()
+            .unwrap();
         trace!(target: "ratsio", "publishing to topic : {}", publ.subject);
         self.nats_client.publish(publ)
     }
 
-
-    pub fn close(&self) -> impl Future<Item=(), Error=()> {
+    pub fn close(&self) -> impl Future<Item = (), Error = ()> {
         let nats_client = self.nats_client.clone();
         let close_requests = self.client_info.read().close_requests.clone();
         let client_id = self.client_id.clone();
 
         let subscriptions = self.subscriptions.clone();
 
-        let subs_futures = subscriptions.read().iter().map(|(_, s)| {
-            let s = s.clone();
-            s.close()
-        }).collect::<Vec<_>>();
-        future::join_all(subs_futures).map_err(|_| RatsioError::GenericError("Closing connection".into()))
+        let subs_futures = subscriptions
+            .read()
+            .iter()
+            .map(|(_, s)| {
+                let s = s.clone();
+                s.close()
+            })
+            .collect::<Vec<_>>();
+        future::join_all(subs_futures)
+            .map_err(|_| RatsioError::GenericError("Closing connection".into()))
             .and_then(move |_| {
                 let mut close_request = CloseRequest::new();
                 close_request.set_clientID(client_id);
@@ -387,4 +426,3 @@ impl StanClient {
             .from_err()
     }
 }
-
