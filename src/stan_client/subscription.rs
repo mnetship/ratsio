@@ -129,7 +129,6 @@ impl Into<SubscriptionHandler> for AsyncHandler {
     fn into(self) -> SubscriptionHandler {
         SubscriptionHandler(Box::new(
             move |stan_message: StanMessage, subscr: Arc<Subscription>, nats_client: Arc<NatsClient>| {
-                use futures::Future;
                 let ack_sequence = stan_message.sequence;
                 let ack_subject = stan_message.subject.clone();
                 let manual_acks = subscr.cmd.manual_acks;

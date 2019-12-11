@@ -243,7 +243,7 @@ impl NatsClient {
                     *recon_client.control_tx.write() = control_tx;
                     *recon_client.state.write() = NatsClientState::Connected;
 
-                    if let Err(e) = NatsClient::connect(&recon_client).wait() {
+                    if let Err(e) = NatsClient::connect(recon_opts.clone()).wait() {
                         error!(target: "ratsio", "Failed to send connect op {:?}", e)
                     }
 
