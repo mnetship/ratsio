@@ -57,7 +57,7 @@ impl NatsClientMultiplexer {
     pub fn for_sid(
         &self,
         cmd: Subscribe,
-    ) -> impl Stream<Item = Message, Error = RatsioError> + Send + Sync {
+    ) -> impl Stream<Item=Message, Error=RatsioError> + Send + Sync {
         let (tx, rx) = mpsc::unbounded();
         let sid = cmd.sid.clone();
         let subject = cmd.subject.clone();
@@ -74,7 +74,7 @@ impl NatsClientMultiplexer {
         rx.map_err(|_| RatsioError::InnerBrokenChain)
             .take_while(move |sink_msg| match sink_msg {
                 SinkMessage::CLOSE => {
-                    warn!(target:"ratsio", "Closing sink for => {} / {}", &sid, &subject);
+                    warn!(target: "ratsio", "Closing sink for => {} / {}", &sid, &subject);
                     Ok(false)
                 }
                 _ => Ok(true),
@@ -113,7 +113,7 @@ impl NatsClient {
     /// Returns `impl Future<Item = Self, Error = RatsioError>`
     pub fn connect(
         opts: NatsClientOptions,
-    ) -> impl Future<Item = Arc<Self>, Error = RatsioError> + Send + Sync {
+    ) -> impl Future<Item=Arc<Self>, Error=RatsioError> + Send + Sync {
         loop_fn(opts, move |opts| {
             let cont_opts = opts.clone();
             NatsClient::create_client(opts)
@@ -130,14 +130,14 @@ impl NatsClient {
                     } else {
                         Either::B(future::err(RatsioError::NoRouteToHostError))
                     }
-                })                
+                })
         })
     }
     /// Create nats client with options
     /// Called internally depending on the user options.
     fn create_client(
         opts: NatsClientOptions,
-    ) -> impl Future<Item = Arc<Self>, Error = RatsioError> + Send + Sync {
+    ) -> impl Future<Item=Arc<Self>, Error=RatsioError> + Send + Sync {
         let tls_required = opts.tls_required;
         let recon_opts = opts.clone();
         let cluster_uris = opts.cluster_uris.0.clone();
@@ -145,7 +145,7 @@ impl NatsClient {
         NatsConnection::create_connection(reconnect_handler_tx.clone(),
                                           opts.reconnect_timeout, &cluster_uris[..], tls_required)
             .and_then(move |connection| {
-                debug!(target:"ratsio", "Creating NATS client, got a connection.");
+                debug!(target: "ratsio", "Creating NATS client, got a connection.");
                 let connection = Arc::new(connection);
                 let stream_conn = connection.clone();
                 let ping_conn = connection.clone();
@@ -169,7 +169,7 @@ impl NatsClient {
 
                 let ping_interval = u64::from(opts.ping_interval);
                 let ping_max_out = usize::from(opts.ping_max_out);
-                                
+
                 let client = Arc::new(NatsClient {
                     connection: connection.clone(),
                     sender: Arc::new(RwLock::new(sender)),
@@ -179,7 +179,7 @@ impl NatsClient {
                     control_tx: Arc::new(RwLock::new(control_tx)),
                     state: Arc::new(RwLock::new(NatsClientState::Connecting)),
                     opts,
-                    reconnect_handlers: Arc::new(RwLock::new(HashMap::default())),                    
+                    reconnect_handlers: Arc::new(RwLock::new(HashMap::default())),
                 });
 
                 let ping_client = client.clone();
@@ -194,7 +194,9 @@ impl NatsClient {
                     .for_each(move |_| {
                         if *ping_client.state.read() == NatsClientState::Connected {
                             trace!(target: "ratsio", " Send {:?}", Op::PING);
-                            ping_client.sender.read().send(Op::PING);
+                            tokio::spawn(
+                                ping_client.sender.read().send(Op::PING)
+                                    .map_err(|_| ()));
                             let attempts = ping_attempts.inc();
                             if attempts >= 1 {
                                 debug!(target: "ratsio", "Skipped a ping.");
@@ -215,7 +217,7 @@ impl NatsClient {
                     if !recon_opts.subscribe_on_reconnect {
                         let _: Vec<_> = recon_subs_map.read().iter().map(|(_, sink)| {
                             let _ = sink.tx.unbounded_send(SinkMessage::CLOSE);
-                            debug!(target:"ratsio", "Closing sink for => {:?}", &sink.cmd.subject);
+                            debug!(target: "ratsio", "Closing sink for => {:?}", &sink.cmd.subject);
                         }).collect();
                         recon_subs_map.write().clear();
                     }
@@ -303,22 +305,27 @@ impl NatsClient {
                         pong_reset.reset();
                     }
                     Op::INFO(server_info) => {
-                        pong_reset.reset();                        
+                        pong_reset.reset();
                         *client.server_info.write() = Some(server_info.clone());
                         let mut reconnect_hosts = server_info.connect_urls.clone();
                         for host in client.connection.init_hosts.clone() {
                             reconnect_hosts.push(host);
                         }
-                        *client.connection.reconnect_hosts.write() = reconnect_hosts;  
+                        *client.connection.reconnect_hosts.write() = reconnect_hosts;
                         let connect = Self::generate_connect(&client, &server_info);
                         // Now send a CONNECT protocol message in response to the INFO, required so 
                         // we can sign the server-supplied nonce if using JWT security.                        
                         debug!("Sending CONNECT...");
+                        let reconn_client = client.clone();
+                        tokio::spawn(
                         client
                             .sender
                             .read()
-                            .send(Op::CONNECT(connect)); 
-                        *client.state.write() = NatsClientState::Connected;
+                            .send(Op::CONNECT(connect)).map(move |_| {
+                            *reconn_client.state.write() = NatsClientState::Connected;
+                        }).map_err(|err| {
+                           error!(target: "ratsio", "NATS Server - unable to reconnect - {}", err)
+                        }));
                     }
                     Op::ERR(msg) => {
                         error!(target: "ratsio", "NATS Server - Error - {}", msg);
@@ -345,7 +352,7 @@ impl NatsClient {
         let not_empty = |x: &String| !x.is_empty();
         let mut sig: Option<String> = None;
         let mut jwt: Option<String> = None;
-            
+
         if let Some(ref jwtopt) = client.opts.user_jwt {
             jwt = Some(jwtopt.jwt.clone());
             debug!("User JWT option detected");
@@ -357,7 +364,7 @@ impl NatsClient {
                 }
                 Err(e) => error!("Nonce signing callback failed: {}", e),
             }
-        }    
+        }
 
         let mut connect = Connect {
             verbose: client.opts.verbose,
@@ -383,16 +390,15 @@ impl NatsClient {
             connect.user = Some(node_url.username().to_string());
         }
         connect
-
     }
-            
+
     /// Send a PUB command to the server
     ///
     /// Returns `impl Future<Item = (), Error = RatsioError>`
     pub fn publish(
         &self,
         cmd: Publish,
-    ) -> impl Future<Item = (), Error = RatsioError> + Send + Sync {
+    ) -> impl Future<Item=(), Error=RatsioError> + Send + Sync {
         if let Some(ref server_info) = *self.server_info.read() {
             if cmd.payload.len() > server_info.max_payload {
                 return Either::A(future::err(RatsioError::MaxPayloadOverflow(
@@ -410,7 +416,7 @@ impl NatsClient {
     pub fn unsubscribe(
         &self,
         cmd: UnSubscribe,
-    ) -> impl Future<Item = (), Error = RatsioError> + Send + Sync {
+    ) -> impl Future<Item=(), Error=RatsioError> + Send + Sync {
         if let Some(max) = cmd.max_msgs {
             if let Some(mut s) = (*self.receiver.read().subs_map.write()).get_mut(&cmd.sid) {
                 s.max_count = Some(max);
@@ -427,10 +433,10 @@ impl NatsClient {
         &self,
         cmd: Subscribe,
     ) -> impl Future<
-        Item = impl Stream<Item = Message, Error = RatsioError> + Send + Sync,
-        Error = RatsioError,
+        Item=impl Stream<Item=Message, Error=RatsioError> + Send + Sync,
+        Error=RatsioError,
     > + Send
-                 + Sync {
+    + Sync {
         let receiver = self.receiver.clone();
         let subs_receiver = self.receiver.clone();
         let sid = cmd.sid.clone();
@@ -470,7 +476,7 @@ impl NatsClient {
         &self,
         subject: String,
         payload: &[u8],
-    ) -> impl Future<Item = Message, Error = RatsioError> + Send + Sync {
+    ) -> impl Future<Item=Message, Error=RatsioError> + Send + Sync {
         if let Some(ref server_info) = *self.server_info.read() {
             if payload.len() > server_info.max_payload {
                 return Either::A(future::err(RatsioError::MaxPayloadOverflow(
@@ -514,7 +520,7 @@ impl NatsClient {
                     Some(m) => {
                         receiver.read().remove_sid(&sid);
                         Ok(m)
-                    },
+                    }
                     None => Err(RatsioError::InnerBrokenChain)
                 }
             });
