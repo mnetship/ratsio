@@ -1,12 +1,12 @@
 use crate::codec::OpCodec;
-use futures::prelude::*;
+use futures::{prelude::*, task::{Context, Poll}};
 use native_tls::TlsConnector as NativeTlsConnector;
-use std::net::SocketAddr;
-use tokio_tcp::TcpStream;
+use std::{net::SocketAddr, pin::Pin};
+use tokio::net::TcpStream;
 use tokio_tls::{TlsConnector, TlsStream};
+use tokio_util::codec::{Decoder, Framed};
 use crate::error::*;
 use crate::ops::Op;
-use tokio::codec::{Decoder, Framed};
 
 #[derive(Debug)]
 pub(crate) enum NatsConnectionInner {
@@ -17,14 +17,16 @@ pub(crate) enum NatsConnectionInner {
 
 
 impl NatsConnectionInner {
-    pub(crate) fn connect_tcp(addr: &SocketAddr) -> impl Future<Item=TcpStream, Error=RatsioError> {
-        TcpStream::connect(addr).from_err()
+    pub(crate) fn connect_tcp(addr: SocketAddr) -> impl Future<Output=Result<TcpStream, RatsioError>> {
+        TcpStream::connect(addr)
+            .map_err(|err| RatsioError::from(err))
     }
 
-    pub(crate) fn upgrade_tcp_to_tls(host: &str, socket: TcpStream) -> impl Future<Item=TlsStream<TcpStream>, Error=RatsioError>{
+    pub(crate) fn upgrade_tcp_to_tls(host: String, socket: TcpStream) -> impl Future<Output=Result<TlsStream<TcpStream>, RatsioError>>{
         let tls_connector = NativeTlsConnector::builder().build().unwrap();
         let tls_stream: TlsConnector = tls_connector.into();
-        tls_stream.connect(&host, socket).from_err()
+        tls_stream.connect(&host, socket)
+            .map(|result| result.map_err(|err| RatsioError::from(err)))
     }
 }
 
@@ -40,18 +42,17 @@ impl From<TlsStream<TcpStream>> for NatsConnectionInner {
     }
 }
 
-impl Sink for NatsConnectionInner {
-    type SinkError = RatsioError;
-    type SinkItem = Op;
+impl Sink<Op> for NatsConnectionInner {
+    type Error = RatsioError;
 
-    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+    fn start_send(&mut self, item: Op) -> Result<(), Self::Error> {
         match self {
             NatsConnectionInner::Tcp(framed) => framed.start_send(item),
             NatsConnectionInner::Tls(framed) => framed.start_send(item),
         }
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+    fn poll_flush(&mut self, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
         match self {
             NatsConnectionInner::Tcp(framed) => framed.poll_complete(),
             NatsConnectionInner::Tls(framed) => framed.poll_complete(),
@@ -60,13 +61,12 @@ impl Sink for NatsConnectionInner {
 }
 
 impl Stream for NatsConnectionInner {
-    type Error = RatsioError;
     type Item = Op;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         match self {
-            NatsConnectionInner::Tcp(framed) => framed.poll(),
-            NatsConnectionInner::Tls(framed) => framed.poll(),
+            NatsConnectionInner::Tcp(framed) => framed.poll_next(),
+            NatsConnectionInner::Tls(framed) => framed.poll_next(),
         }
     }
 }

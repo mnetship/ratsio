@@ -1,7 +1,7 @@
 use crate::nats_client::{NatsClient, NatsClientOptions};
 use futures::{
     Future,
-    sync::mpsc,
+    channel::mpsc,
 };
 use crate::nuid::NUID;
 use parking_lot::RwLock;
@@ -239,10 +239,10 @@ pub struct ClientInfo {
     ping_requests: String,
 }
 
-pub struct AsyncHandler(pub Box<Fn(StanMessage) -> Box<Future<Item=(), Error=()> + Send + Sync> + Send + Sync>);
+pub struct AsyncHandler(pub Box<dyn Fn(StanMessage) -> Box<dyn Future<Output=()>+ Send + Sync> + Send + Sync>);
 
-pub struct SyncHandler(pub Box<Fn(StanMessage) -> Result<(), ()> + Send + Sync>);
+pub struct SyncHandler(pub Box<dyn Fn(StanMessage) -> Result<(), ()> + Send + Sync>);
 
-pub type Handler = Fn(StanMessage, Arc<Subscription>, Arc<NatsClient>) -> Result<(), ()> + Send + Sync;
+pub type Handler = dyn Fn(StanMessage, Arc<Subscription>, Arc<NatsClient>) -> Result<(), ()> + Send + Sync;
 
 pub struct SubscriptionHandler(Box<Handler>);

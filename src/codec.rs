@@ -2,7 +2,7 @@ use crate::error::RatsioError;
 use crate::protocol::parser::operation;
 use crate::ops::*;
 
-use tokio::codec::{Decoder, Encoder};
+use tokio_util::codec::{Decoder, Encoder};
 
 use bytes::{BytesMut, BufMut};
 use nom::{Err as NomErr};

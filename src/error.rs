@@ -79,8 +79,8 @@ impl From<io::Error> for RatsioError {
     }
 }
 
-impl<T> From<::futures::sync::mpsc::SendError<T>> for RatsioError {
-    fn from(_: ::futures::sync::mpsc::SendError<T>) -> Self {
+impl From<::futures::channel::mpsc::SendError> for RatsioError {
+    fn from(_: ::futures::channel::mpsc::SendError) -> Self {
         RatsioError::InnerBrokenChain
     }
 }
@@ -95,4 +95,3 @@ from_error!(::std::string::FromUtf8Error, RatsioError, RatsioError::UTF8Error);
 from_error!(::native_tls::Error, RatsioError, RatsioError::TlsError);
 from_error!(String, RatsioError, RatsioError::GenericError);
 from_error!(::url::ParseError, RatsioError, RatsioError::UrlParseError);
-//from_error!(::std::net::AddrParseError, RatsioError, RatsioError::AddrParseError);

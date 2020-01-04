@@ -4,14 +4,15 @@ use crate::ops::{Connect, Message, Op, ServerInfo, Subscribe};
 use futures::{
     prelude::*,
     stream,
-    sync::mpsc::{self, UnboundedSender},
+    task::Poll,
+    channel::mpsc::{self, UnboundedSender},
     Future, Stream,
 };
 use parking_lot::RwLock;
 use std::fmt::Debug;
 use std::{collections::HashMap, sync::Arc};
 
-type NatsSink = stream::SplitSink<NatsConnSinkStream>;
+type NatsSink = stream::SplitSink<NatsConnSinkStream, Op>;
 type NatsStream = stream::SplitStream<NatsConnSinkStream>;
 
 mod client;
@@ -23,15 +24,14 @@ pub struct NatsClientSender {
 
 impl NatsClientSender {
     fn new(sink: NatsSink) -> Self {
-        let (tx, rx) = mpsc::unbounded();
-        let rx = rx.map_err(|_| RatsioError::InnerBrokenChain);
-        let work = sink.send_all(rx).map(|_| ()).map_err(|_| ());
+        let (tx, rx) = mpsc::unbounded::<Op>();
+        let work = sink.send_all(&mut rx);
         tokio::spawn(work);
 
         NatsClientSender { tx }
     }
     /// Sends an OP to the server
-    pub fn send(&self, op: Op) -> impl Future<Item = (), Error = RatsioError> {
+    pub fn send(&self, op: Op) -> impl Future<Output = ()> {
         //let _verbose = self.verbose.clone();
         self.tx
             .unbounded_send(op)
@@ -101,7 +101,7 @@ impl From<&str> for UriVec {
 
 /// An alias representing the requirements for the nonce signing callback function
 pub type SignerCallback =
-    Arc<Fn(&[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> + Send + Sync>;
+    Arc<dyn Fn(&[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> + Send + Sync>;
 
 /// An option that indicates client JWT authentication should be used. Takes a callback that
 /// will be used to sign the nonce the server supplies. For security reasons, ensure that
@@ -208,7 +208,7 @@ pub enum NatsClientState {
     Disconnected,
 }
 
-type HandlerMap = HashMap<String, Box<Fn(Arc<NatsClient>) -> () + Send + Sync>>;
+type HandlerMap = HashMap<String, Box<dyn Fn(Arc<NatsClient>) -> () + Send + Sync>>;
 
 /// The NATS Client. What you'll be using mostly. All the async handling is made internally except for
 /// the system messages that are forwarded on the `Stream` that the client implements
@@ -220,7 +220,7 @@ pub struct NatsClient {
     /// Server info
     server_info: Arc<RwLock<Option<ServerInfo>>>,
     /// Stream of the messages that are not caught for subscriptions (only system messages like PING/PONG should be here)
-    unsub_receiver: Box<dyn Stream<Item = Op, Error = RatsioError> + Send + Sync>,
+    unsub_receiver: Box<dyn Stream<Item = Result<Op, RatsioError>> + Send + Sync>,
     /// Sink part to send commands
     pub sender: Arc<RwLock<NatsClientSender>>,
     /// Subscription multiplexer
@@ -245,12 +245,12 @@ impl ::std::fmt::Debug for NatsClient {
 }
 
 impl Stream for NatsClient {
-    type Error = RatsioError;
     type Item = Op;
 
-    fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>,
+        cx: &mut Context<'_>,) -> Poll<Option<Self::Item>> {
         self.unsub_receiver
-            .poll()
+            .poll_next()
             .map_err(|_| RatsioError::InnerBrokenChain)
     }
 }

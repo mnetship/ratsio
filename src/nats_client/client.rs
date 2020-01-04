@@ -5,16 +5,16 @@ use crate::error::RatsioError;
 use crate::net::*;
 use crate::ops::{Message, Op, Publish, Subscribe, UnSubscribe};
 use futures::{
-    future::{self, loop_fn, Either, Loop},
+    future::{self, Either},
     prelude::*,
-    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
     Future, Stream,
 };
 use parking_lot::RwLock;
 use std::time::{Duration, Instant};
 use std::{collections::HashMap, sync::Arc};
-use tokio::timer::Delay;
-use tokio::timer::Interval;
+use tokio::time::Delay;
+use tokio::time::Interval;
 
 use super::*;
 
@@ -96,7 +96,7 @@ impl NatsClient {
     pub fn add_reconnect_handler(
         &self,
         hid: String,
-        handler: Box<Fn(Arc<NatsClient>) -> () + Send + Sync>,
+        handler: Box<dyn Fn(Arc<NatsClient>) -> () + Send + Sync>,
     ) {
         self.reconnect_handlers.write().insert(hid, handler);
     }
@@ -122,13 +122,13 @@ impl NatsClient {
                     if cont_opts.ensure_connect {
                         let when =
                             Instant::now() + Duration::from_millis(cont_opts.reconnect_timeout);
-                        Either::A(
+                        Either::Left(
                             Delay::new(when)
                                 .and_then(move |_| Ok(Loop::Continue(cont_opts)))
                                 .map_err(|_| RatsioError::InnerBrokenChain),
                         )
                     } else {
-                        Either::B(future::err(RatsioError::NoRouteToHostError))
+                        Either::Right(future::err(RatsioError::NoRouteToHostError))
                     }
                 })                
         })
@@ -388,35 +388,33 @@ impl NatsClient {
             
     /// Send a PUB command to the server
     ///
-    /// Returns `impl Future<Item = (), Error = RatsioError>`
+    /// Returns `impl Future<Output = Result<(), RatsioError>>`
     pub fn publish(
         &self,
         cmd: Publish,
-    ) -> impl Future<Item = (), Error = RatsioError> + Send + Sync {
+    ) -> impl Future<Output = Result<(), RatsioError>> + Send + Sync {
         if let Some(ref server_info) = *self.server_info.read() {
             if cmd.payload.len() > server_info.max_payload {
-                return Either::A(future::err(RatsioError::MaxPayloadOverflow(
+                return Either::Left(future::err(RatsioError::MaxPayloadOverflow(
                     server_info.max_payload,
                 )));
             }
         }
-
-        Either::B(self.sender.read().send(Op::PUB(cmd)))
+        Either::Right(self.sender.read().send(Op::PUB(cmd)))
     }
 
     /// Send a UNSUB command to the server and de-register stream in the multiplexer
     ///
-    /// Returns `impl Future<Item = (), Error = RatsioError>`
+    /// Returns `impl Future<Output = Result<(), RatsioError>>`
     pub fn unsubscribe(
         &self,
         cmd: UnSubscribe,
-    ) -> impl Future<Item = (), Error = RatsioError> + Send + Sync {
+    ) -> impl Future<Output = Result<(), RatsioError>> + Send + Sync {
         if let Some(max) = cmd.max_msgs {
             if let Some(mut s) = (*self.receiver.read().subs_map.write()).get_mut(&cmd.sid) {
                 s.max_count = Some(max);
             }
         }
-
         self.sender.read().send(Op::UNSUB(cmd))
     }
 
@@ -427,8 +425,7 @@ impl NatsClient {
         &self,
         cmd: Subscribe,
     ) -> impl Future<
-        Item = impl Stream<Item = Message, Error = RatsioError> + Send + Sync,
-        Error = RatsioError,
+        Output = impl Stream<Item = Message> + Send + Sync,
     > + Send
                  + Sync {
         let receiver = self.receiver.clone();
@@ -436,8 +433,8 @@ impl NatsClient {
         let sid = cmd.sid.clone();
         debug!(target: "ratsio", "Subscription for {} / {}", &cmd.subject, &sid);
         let subs_cmd = cmd.clone();
-        self.sender.read().send(Op::SUB(cmd)).and_then(move |_| {
-            let stream = receiver.read().for_sid(subs_cmd).and_then(move |msg| {
+        self.sender.read().send(Op::SUB(cmd)).then(move |_| {
+            let stream = receiver.read().for_sid(subs_cmd).then(move |msg| {
                 let lock = subs_receiver.read();
                 let mut stx = lock.subs_map.write();
                 let mut delete = None;
@@ -470,10 +467,10 @@ impl NatsClient {
         &self,
         subject: String,
         payload: &[u8],
-    ) -> impl Future<Item = Message, Error = RatsioError> + Send + Sync {
+    ) -> impl Future<Output = Result<Message, RatsioError>> + Send + Sync {
         if let Some(ref server_info) = *self.server_info.read() {
             if payload.len() > server_info.max_payload {
-                return Either::A(future::err(RatsioError::MaxPayloadOverflow(
+                return Either::Left(future::err(RatsioError::MaxPayloadOverflow(
                     server_info.max_payload,
                 )));
             }
@@ -519,13 +516,13 @@ impl NatsClient {
                 }
             });
 
-        Either::B(
+        Either::Right(
             self.sender
                 .read()
                 .send(Op::SUB(sub_cmd))
-                .and_then(move |_| unsub_sender.read().send(Op::UNSUB(unsub_cmd)))
-                .and_then(move |_| pub_sender.read().send(Op::PUB(pub_cmd)))
-                .and_then(move |_| stream),
+                .then(move |_| unsub_sender.read().send(Op::UNSUB(unsub_cmd)))
+                .then(move |_| pub_sender.read().send(Op::PUB(pub_cmd)))
+                .then(move |_| stream),
         )
     }
 }

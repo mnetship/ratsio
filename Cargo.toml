@@ -18,10 +18,10 @@ edition = "2018"
 
 
 [dependencies]
-bytes               = "^0.4"
+bytes               = "^0.5"
 failure             = "^0.1"
 failure_derive      = "^0.1"
-futures             = "^0.1"
+futures             = "^0.3"
 rand                = "^0.6"
 serde               = {version="^1.0"}
 serde_derive        = {version="^1.0"}
@@ -31,10 +31,10 @@ chrono              = "^0.4"
 env_logger          = "^0.6"
 log                 = "^0.4"
 nom                 = {version = "^4.1", features = ["regexp", "verbose-errors"]}
-tokio               = {version="^0.1"}
-tokio-tcp           = "^0.1"
+tokio               = {version="^0.2", features = ["io-util", "rt-core", "tcp", "time"]}
+tokio-util          = {version="^0.2", features = ["codec"]}
 native-tls          = "^0.2"
-tokio-tls           = "^0.2"
+tokio-tls           = "^0.3"
 parking_lot         = "^0.7"
 derive_builder      = "^0.7"
 url                 = "^1.7"

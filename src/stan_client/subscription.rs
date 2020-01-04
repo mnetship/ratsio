@@ -5,10 +5,10 @@ use crate::protocol::{
     Ack, MsgProto, UnsubscribeRequest,
 };
 use futures::{
-    future::{self, Either, IntoFuture}, Future,
+    prelude::*,
+    future::{self, Either}, Future,
     stream::Stream,
 };
-
 use protobuf::{Message as ProtoMessage, parse_from_bytes};
 use std::{
     sync::{
@@ -19,7 +19,7 @@ use std::{
 use super::*;
 
 impl Subscription {
-    pub(crate) fn start(self, stream: Box<Stream<Item=Message, Error=RatsioError> + Send + Sync>) -> Arc<Self> {
+    pub(crate) fn start(self, stream: Box<dyn Stream<Item=Message> + Send + Sync>) -> Arc<Self> {
         let arc_self = Arc::new(self);
         let handler_subscr = arc_self.clone();
         let subs_nats_client = arc_self.nats_client.clone();
@@ -134,14 +134,14 @@ impl Into<SubscriptionHandler> for AsyncHandler {
                 let manual_acks = subscr.cmd.manual_acks;
                 let ack_inbox = subscr.ack_inbox.clone();
                 tokio::spawn((self.0)(stan_message)
-                    .and_then(move |_| {
+                    .then(move |_| {
                         //stan_message.
                         if !manual_acks {
                             let mut ack_request = Ack::new();
                             ack_request.set_subject(ack_subject);
                             ack_request.set_sequence(ack_sequence);
                             let buf = ProtoMessage::write_to_bytes(&ack_request).unwrap();
-                            Either::A(nats_client
+                            Either::Left(nats_client
                                 .publish(Publish::builder()
                                     .payload(Vec::from(&buf[..]))
                                     .subject(ack_inbox).build().unwrap())
@@ -149,7 +149,7 @@ impl Into<SubscriptionHandler> for AsyncHandler {
                                     error!(" Error acknowledging message {}", err);
                                 }))
                         } else {
-                            Either::B(future::ok(()))
+                            Either::Right(future::ok(()))
                         }
                     }));
                 Ok(())

@@ -8,9 +8,9 @@ use crate::protocol::{
     SubscriptionResponse,
 };
 use futures::{
+    prelude::*,
     future::{self, Either},
-    stream::Stream,
-    sync::mpsc,
+    channel::mpsc,
     Future,
 };
 use parking_lot::RwLock;
@@ -37,7 +37,7 @@ impl Into<ClientInfo> for ConnectResponse {
 impl StanClient {
     pub fn from_options(
         options: StanOptions,
-    ) -> impl Future<Item = Arc<Self>, Error = RatsioError> {
+    ) -> impl Future<Output = Arc<Self>> {
         let id_generator = Arc::new(RwLock::new({
             let mut id_gen = NUID::new();
             id_gen.randomize_prefix();
@@ -53,7 +53,7 @@ impl StanClient {
         let mut nats_options = options.nats_options.clone();
         nats_options.name = client_id.clone();
         nats_options.subscribe_on_reconnect = false;
-        NatsClient::connect(nats_options.clone()).and_then(move |nats_client: Arc<NatsClient>| {
+        NatsClient::connect(nats_options.clone()).then(move |nats_client: Arc<NatsClient>| {
             debug!(target: "ratsio", "Got NATS client");
             let mut connect_request = ConnectRequest::new();
             connect_request.set_clientID(client_id.clone());
@@ -240,7 +240,7 @@ impl StanClient {
                                 .subject(reply_to.clone())
                                 .payload(buf)
                                 .build().unwrap();
-                            Either::A(nats_client.publish(reply_publish)
+                            Either::Left(nats_client.publish(reply_publish)
                                 .map(|_| {
                                     trace!(target: "ratsio", "HEARTBEAT -- heartbeat reply was sent");
                                 })
@@ -249,7 +249,7 @@ impl StanClient {
                                     Ok(())
                                 }))
                         } else {
-                            Either::B(future::ok(()))
+                            Either::Right(future::ok(()))
                         }
                     })
             }).map_err(|err| {
@@ -289,7 +289,7 @@ impl StanClient {
         &self,
         subscribe: StanSubscribe,
         handler: T,
-    ) -> impl Future<Item = String, Error = RatsioError>
+    ) -> impl Future<Output = Result<String, RatsioError>>
     where
         T: Into<SubscriptionHandler>,
     {
@@ -302,7 +302,7 @@ impl StanClient {
         subscribe: StanSubscribe,
         subscription_id: String,
         handler: Arc<SubscriptionHandler>,
-    ) -> impl Future<Item = String, Error = RatsioError> {
+    ) -> impl Future<Output = Result<String, RatsioError>> {
         let inbox: String = format!("_SUB.{}", self.id_generator.write().next());
 
         let subs_nats_client = self.nats_client.clone();
@@ -322,7 +322,7 @@ impl StanClient {
                     parse_from_bytes::<SubscriptionResponse>(&sub_response.payload[..]).unwrap();
 
                 let sub = Subscribe::builder().subject(inbox.clone()).build().unwrap();
-                subs_nats_client.subscribe(sub).and_then(move |stream| {
+                subs_nats_client.subscribe(sub).then(move |stream| {
                     let subscription = Subscription {
                         subscription_id: subscription_id.clone(),
                         client_id: subs_client_id,
@@ -350,7 +350,7 @@ impl StanClient {
         ack_inbox: String,
         subject: String,
         sequence: u64,
-    ) -> impl Future<Item = (), Error = RatsioError> {
+    ) -> impl Future<Output = Result<(), RatsioError>> {
         let mut ack_request = Ack::new();
         ack_request.set_subject(subject);
         ack_request.set_sequence(sequence);
@@ -365,7 +365,7 @@ impl StanClient {
     }
 
     /// Sends an OP to the server
-    pub fn send(&self, message: StanMessage) -> impl Future<Item = (), Error = RatsioError> {
+    pub fn send(&self, message: StanMessage) -> impl Future<Output = Result<(), RatsioError>> {
         let mut pub_msg = PubMsg::new();
         let mut hasher = Sha256::new();
         hasher.input(&message.payload[..]);
@@ -398,7 +398,7 @@ impl StanClient {
         self.nats_client.publish(publ)
     }
 
-    pub fn close(&self) -> impl Future<Item = (), Error = ()> {
+    pub fn close(&self) -> impl Future<Output = ()> {
         let nats_client = self.nats_client.clone();
         let close_requests = self.client_info.read().close_requests.clone();
         let client_id = self.client_id.clone();
