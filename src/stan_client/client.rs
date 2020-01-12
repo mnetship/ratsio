@@ -365,7 +365,7 @@ impl StanClient {
     }
 
 
-    fn acknowledge(&self, message: StanMessage) -> impl Future<Item = (), Error = RatsioError> {
+    pub fn acknowledge(&self, message: StanMessage) -> impl Future<Item = (), Error = RatsioError> {
         match message.ack_inbox.clone() {
             Some(ack_inbox) => {
                 Either::A(self.ack_message(ack_inbox, message.subject.clone(), message.sequence))
