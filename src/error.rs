@@ -65,7 +65,10 @@ pub enum RatsioError {
     SubscriptionReachedMaxMsgs(u32),
 
     #[fail(display = "Stream Closed for {}", _0)]
-    StreamClosed(String)
+    StreamClosed(String),
+
+    #[fail(display = "Missing ack_inbox for acknowledgement")]
+    AckInboxMissing,
 }
 
 impl From<io::Error> for RatsioError {

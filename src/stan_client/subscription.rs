@@ -20,10 +20,10 @@ use super::*;
 
 impl Subscription {
     pub(crate) fn start(self, stream: Box<Stream<Item=Message, Error=RatsioError> + Send + Sync>) -> Arc<Self> {
+        let ack_inbox = Some(self.ack_inbox.clone());
         let arc_self = Arc::new(self);
         let handler_subscr = arc_self.clone();
         let subs_nats_client = arc_self.nats_client.clone();
-
         let subs_future = stream
             .for_each(move |nats_msg| {
                 debug!(target: "ratsio", "message => {:#?} ", &nats_msg);
@@ -35,6 +35,7 @@ impl Subscription {
                     timestamp: msg.timestamp,
                     sequence: msg.sequence,
                     redelivered: msg.redelivered,
+                    ack_inbox: ack_inbox.clone(),
                 };
                 if handler_subscr.clone().is_closed.load(Ordering::Relaxed) {
                     future::ok(())

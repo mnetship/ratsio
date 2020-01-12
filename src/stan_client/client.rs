@@ -364,6 +364,19 @@ impl StanClient {
         )
     }
 
+
+    fn acknowledge(&self, message: StanMessage) -> impl Future<Item = (), Error = RatsioError> {
+        match message.ack_inbox.clone() {
+            Some(ack_inbox) => {
+                Either::A(self.ack_message(ack_inbox, message.subject.clone(), message.sequence))
+            },
+            None => {
+                Either::B(future::err(RatsioError::AckInboxMissing))
+            }
+        }
+
+    }
+
     /// Sends an OP to the server
     pub fn send(&self, message: StanMessage) -> impl Future<Item = (), Error = RatsioError> {
         let mut pub_msg = PubMsg::new();

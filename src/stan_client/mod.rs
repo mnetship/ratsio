@@ -95,6 +95,7 @@ pub struct StanMessage {
     pub timestamp: i64,
     pub sequence: u64,
     pub redelivered: bool,
+    pub ack_inbox: Option<String>,
 }
 
 impl StanMessage {
@@ -106,6 +107,7 @@ impl StanMessage {
             timestamp: 0,
             sequence: 0,
             redelivered: false,
+            ack_inbox: None,
         }
     }
 
@@ -117,6 +119,7 @@ impl StanMessage {
             timestamp: 0,
             sequence: 0,
             redelivered: false,
+            ack_inbox: None,
         }
     }
 
@@ -138,6 +141,7 @@ impl Default for StanMessage {
             timestamp: tstamp_ms,
             sequence: 0,
             redelivered: false,
+            ack_inbox: None,
         }
     }
 }
