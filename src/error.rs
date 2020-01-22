@@ -79,8 +79,8 @@ impl From<io::Error> for RatsioError {
     }
 }
 
-impl<T> From<::futures::sync::mpsc::SendError<T>> for RatsioError {
-    fn from(_: ::futures::sync::mpsc::SendError<T>) -> Self {
+impl From<::futures::channel::mpsc::SendError> for RatsioError {
+    fn from(_: ::futures::channel::mpsc::SendError) -> Self {
         RatsioError::InnerBrokenChain
     }
 }

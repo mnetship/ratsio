@@ -173,7 +173,7 @@ or
 Bug fixes: 
  1. Send connect op when reconnecting, thanks to David McNeil
 
-# Version 0.3.0 
+# Version 0.2.4 
 Merged the `from_options` and `connect` methods because `from_options` was actually making a TCP connection, and so its 
 name was misleading. Further, the new client now properly awaits the `INFO` pre-amble from the server before supplying the 
 `CONNECT` message.

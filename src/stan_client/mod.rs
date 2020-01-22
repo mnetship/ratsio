@@ -1,8 +1,8 @@
 use crate::nats_client::{NatsClient, NatsClientOptions};
 use futures::{
     Future,
-    sync::mpsc,
 };
+use futures::channel::mpsc;
 use crate::nuid::NUID;
 use parking_lot::RwLock;
 use std::{
@@ -12,6 +12,8 @@ use std::{
         atomic::AtomicBool,
     },
 };
+use futures::executor::LocalPool;
+
 mod client;
 mod subscription;
 
@@ -227,6 +229,7 @@ pub struct StanClient {
     pub protocol: i32,
     pub public_key: String,
     unsub_tx: mpsc::UnboundedSender<String>,
+    pub(crate) executor: Arc<LocalPool>,
 }
 
 #[derive(Clone, Debug)]
@@ -239,7 +242,7 @@ pub struct ClientInfo {
     ping_requests: String,
 }
 
-pub struct AsyncHandler(pub Box<Fn(StanMessage) -> Box<Future<Item=(), Error=()> + Send + Sync> + Send + Sync>);
+pub struct AsyncHandler(pub Box<Fn(StanMessage) -> Box<Future<Output=Result<(), ()>> + Send + Sync> + Send + Sync>);
 
 pub struct SyncHandler(pub Box<Fn(StanMessage) -> Result<(), ()> + Send + Sync>);
 

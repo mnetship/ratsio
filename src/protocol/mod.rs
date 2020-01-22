@@ -2,6 +2,7 @@
 pub mod protocol;
 pub use self::protocol::*;
 
+#[allow(bare_trait_objects)]
 
 pub mod parser;
 pub use self::parser::*;

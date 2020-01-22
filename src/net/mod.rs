@@ -1,4 +1,4 @@
-use futures::sync::mpsc::UnboundedSender;
+use futures::channel::mpsc::UnboundedSender;
 use std::sync::Arc;
 pub(crate) use self::connection::{NatsConnSinkStream, NatsConnection};
 

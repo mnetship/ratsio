@@ -3,20 +3,26 @@ use atomic_counter::ConsistentCounter;
 
 use crate::error::RatsioError;
 use crate::net::*;
-use crate::ops::{Message, Op, Publish, Subscribe, UnSubscribe};
+use crate::ops::{Message, Op, Publish, Subscribe, UnSubscribe, ServerInfo, Connect};
 use futures::{
-    future::{self, loop_fn, Either, Loop},
+    future::{self, Either},
+    channel::mpsc,
     prelude::*,
-    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
     Future, Stream,
 };
-use parking_lot::RwLock;
 use std::time::{Duration, Instant};
 use std::{collections::HashMap, sync::Arc};
-use tokio::timer::Delay;
-use tokio::timer::Interval;
 
-use super::*;
+use tokio::time::Interval;
+use crate::nats_client::*;
+use futures::executor::LocalPool;
+use futures::task::{LocalSpawnExt, SpawnExt};
+use futures::future::TryFutureExt;
+use std::sync::RwLock;
+use futures_timer::Delay;
+use crate::net::connection::{NatsConnection, NatsConnSinkStream};
+use futures_utils::stream::stream::StreamExt;
+
 
 impl NatsClientMultiplexer {
     fn new(
@@ -31,7 +37,7 @@ impl NatsClientMultiplexer {
             .for_each(move |op| {
                 match op {
                     Op::MSG(msg) => {
-                        if let Some(s) = (*mltpx_subs_map.read()).get(&msg.sid) {
+                        if let Some(s) = (*mltpx_subs_map.read().unwrap()).get(&msg.sid) {
                             let _ = s.tx.unbounded_send(SinkMessage::Message(msg));
                         }
                     }
@@ -46,22 +52,26 @@ impl NatsClientMultiplexer {
             .map(|_| ())
             .from_err();
 
-        tokio::spawn(multiplexer_fut);
+
+        let executor = Arc::new(LocalPool::new());
+        let spawner = executor.spawner();
+        spawner.spawn(multiplexer_fut);
 
         NatsClientMultiplexer {
             subs_map,
             control_tx,
+            executor,
         }
     }
 
-    pub fn for_sid(
+    pub async fn for_sid(
         &self,
         cmd: Subscribe,
-    ) -> impl Stream<Item=Message, Error=RatsioError> + Send + Sync {
+    ) -> Message {
         let (tx, rx) = mpsc::unbounded();
         let sid = cmd.sid.clone();
         let subject = cmd.subject.clone();
-        (*self.subs_map.write()).insert(
+        (*self.subs_map.write().unwrap()).insert(
             sid.clone(),
             SubscriptionSink {
                 cmd,
@@ -71,7 +81,7 @@ impl NatsClientMultiplexer {
             },
         );
 
-        rx.map_err(|_| RatsioError::InnerBrokenChain)
+        rx .map_err(|_| RatsioError::InnerBrokenChain)
             .take_while(move |sink_msg| match sink_msg {
                 SinkMessage::CLOSE => {
                     warn!(target: "ratsio", "Closing sink for => {} / {}", &sid, &subject);
@@ -82,7 +92,7 @@ impl NatsClientMultiplexer {
             .filter_map(|sink_msg| match sink_msg {
                 SinkMessage::Message(msg) => Some(msg),
                 _ => None,
-            })
+            }).await
     }
 
     pub fn remove_sid(&self, sid: &str) {
@@ -106,177 +116,176 @@ impl NatsClient {
     }
 
     pub fn get_state(&self) -> NatsClientState {
-        self.state.read().clone()
+        self.state.read().unwrap().clone()
     }
     /// Creates a client and initiates a connection to the server
     ///
     /// Returns `impl Future<Item = Self, Error = RatsioError>`
-    pub fn connect(
-        opts: NatsClientOptions,
-    ) -> impl Future<Item=Arc<Self>, Error=RatsioError> + Send + Sync {
-        loop_fn(opts, move |opts| {
-            let cont_opts = opts.clone();
-            NatsClient::create_client(opts)
-                .and_then(move |client| Ok(Loop::Break(client)))
-                .or_else(move |_err| {
+    pub async fn connect(opts: NatsClientOptions) -> Result<Arc<Self>, RatsioError> {
+        let cont_opts = opts.clone();
+        loop {
+            match NatsClient::create_client(opts).await {
+                Ok(conn) => return Ok(conn),
+                Err(err) => {
                     if cont_opts.ensure_connect {
-                        let when =
-                            Instant::now() + Duration::from_millis(cont_opts.reconnect_timeout);
-                        Either::A(
-                            Delay::new(when)
-                                .and_then(move |_| Ok(Loop::Continue(cont_opts)))
-                                .map_err(|_| RatsioError::InnerBrokenChain),
-                        )
+                        let _ = Delay::new(Duration::from_millis(cont_opts.reconnect_timeout)).await;
+                        continue
                     } else {
-                        Either::B(future::err(RatsioError::NoRouteToHostError))
+                        return Err(err);
                     }
-                })
-        })
+                }
+            }
+        }
     }
     /// Create nats client with options
     /// Called internally depending on the user options.
-    fn create_client(
+    async fn create_client(
         opts: NatsClientOptions,
-    ) -> impl Future<Item=Arc<Self>, Error=RatsioError> + Send + Sync {
+    ) -> Result<Arc<Self>, RatsioError> {
         let tls_required = opts.tls_required;
         let recon_opts = opts.clone();
         let cluster_uris = opts.cluster_uris.0.clone();
         let (reconnect_handler_tx, reconnect_handler_rx) = mpsc::unbounded();
-        NatsConnection::create_connection(reconnect_handler_tx.clone(),
-                                          opts.reconnect_timeout, &cluster_uris[..], tls_required)
-            .and_then(move |connection| {
-                debug!(target: "ratsio", "Creating NATS client, got a connection.");
-                let connection = Arc::new(connection);
-                let stream_conn = connection.clone();
-                let ping_conn = connection.clone();
-                let (sink, stream): (NatsSink, NatsStream) = NatsConnSinkStream {
-                    inner: connection.inner.clone(),
-                    state: connection.state.clone(),
-                    reconnect_trigger: Box::new(move || {
-                        NatsConnection::trigger_reconnect(stream_conn.clone());
-                    }),
-                }.split();
+        let connection = NatsConnection::create_connection(reconnect_handler_tx.clone(),
+                                                           opts.reconnect_timeout, &cluster_uris[..], tls_required).await?;
 
-                let (control_tx, control_rx) = mpsc::unbounded();
-                let subs_map: Arc<RwLock<HashMap<String, SubscriptionSink>>> =
-                    Arc::new(RwLock::new(HashMap::default()));
-                let recon_subs_map = subs_map.clone();
+        debug!(target: "ratsio", "Creating NATS client, got a connection.");
+        let connection = Arc::new(connection);
+        let stream_conn = connection.clone();
+        let ping_conn = connection.clone();
+        let (sink, stream): (NatsSink, NatsStream) = NatsConnSinkStream {
+            inner: connection.inner.clone(),
+            state: connection.state.clone(),
+            reconnect_trigger: Box::new(move || {
+                NatsConnection::trigger_reconnect(stream_conn.clone());
+            }),
+        }.split();
 
-                let receiver = NatsClientMultiplexer::new(stream, subs_map.clone(), control_tx.clone());
-                let sender = NatsClientSender::new(sink);
+        let (control_tx, control_rx) = mpsc::unbounded();
+        let subs_map: Arc<RwLock<HashMap<String, SubscriptionSink>>> =
+            Arc::new(RwLock::new(HashMap::default()));
+        let recon_subs_map = subs_map.clone();
 
-                let (unsub_tx, unsub_rx) = mpsc::unbounded();
+        let receiver = NatsClientMultiplexer::new(stream, subs_map.clone(), control_tx.clone());
+        let sender = NatsClientSender::new(sink);
 
-                let ping_interval = u64::from(opts.ping_interval);
-                let ping_max_out = usize::from(opts.ping_max_out);
+        let (unsub_tx, unsub_rx) = mpsc::unbounded();
 
-                let client = Arc::new(NatsClient {
-                    connection: connection.clone(),
-                    sender: Arc::new(RwLock::new(sender)),
-                    server_info: Arc::new(RwLock::new(None)),
-                    unsub_receiver: Box::new(unsub_rx.map_err(|_| RatsioError::InnerBrokenChain)),
-                    receiver: Arc::new(RwLock::new(receiver)),
-                    control_tx: Arc::new(RwLock::new(control_tx)),
-                    state: Arc::new(RwLock::new(NatsClientState::Connecting)),
-                    opts,
-                    reconnect_handlers: Arc::new(RwLock::new(HashMap::default())),
+        let ping_interval = u64::from(opts.ping_interval);
+        let ping_max_out = usize::from(opts.ping_max_out);
+
+        let client = Arc::new(NatsClient {
+            connection: connection.clone(),
+            sender: Arc::new(RwLock::new(sender)),
+            server_info: Arc::new(RwLock::new(None)),
+            unsub_receiver: Box::new(unsub_rx),
+            receiver: Arc::new(RwLock::new(receiver)),
+            control_tx: Arc::new(RwLock::new(control_tx)),
+            state: Arc::new(RwLock::new(NatsClientState::Connecting)),
+            opts,
+            reconnect_handlers: Arc::new(RwLock::new(HashMap::default())),
+            executor: Arc::new(LocalPool::new()),
+        });
+
+        let ping_client = client.clone();
+        let ping_attempts = Arc::new(ConsistentCounter::new(0));
+        let pong_reset = ping_attempts.clone();
+        let recon_ping_attempts = ping_attempts.clone();
+        NatsClient::control_receiver(control_rx, unsub_tx.clone(), client.clone(), pong_reset);
+
+
+        //Send pings to server to check if we're still connected.
+        let local_executor = client.executor.clone();
+        let spawner = client.executor.spawner();
+        spawner.spawn(Interval::new_interval(Duration::from_secs(ping_interval))
+            .for_each(move |_| {
+                if *ping_client.state.read() == NatsClientState::Connected {
+                    trace!(target: "ratsio", " Send {:?}", Op::PING);
+
+                    let spawner = local_executor.clone().spawner();
+                    spawner.spawn(ping_client.sender.read().send(Op::PING)
+                        .map_err(|_| ()));
+                    let attempts = ping_attempts.inc();
+                    if attempts >= 1 {
+                        debug!(target: "ratsio", "Skipped a ping.");
+                    }
+
+                    if attempts > ping_max_out {
+                        error!(target: "ratsio", "Pings are not responded to, we may be down.");
+                        *ping_client.state.write() = NatsClientState::Disconnected;
+                        NatsConnection::trigger_reconnect(ping_conn.clone());
+                    }
+                }
+                Ok(())
+            }).map_err(|_| ()));
+
+        let recon_client = client.clone();
+        spawner.spawn(reconnect_handler_rx.for_each(move |conn| {
+            *recon_client.state.write() = NatsClientState::Reconnecting;
+            if !recon_opts.subscribe_on_reconnect {
+                let _: Vec<_> = recon_subs_map.read().iter().map(|(_, sink)| {
+                    let _ = sink.tx.unbounded_send(SinkMessage::CLOSE);
+                    debug!(target: "ratsio", "Closing sink for => {:?}", &sink.cmd.subject);
+                }).collect();
+                recon_subs_map.write().clear();
+            }
+
+            let _ = recon_client.control_tx.read().unbounded_send(Op::CLOSE);
+            recon_ping_attempts.reset();
+            let stream_conn = conn.clone();
+            let (sink, stream): (NatsSink, NatsStream) = NatsConnSinkStream {
+                inner: conn.inner.clone(),
+                state: conn.state.clone(),
+                reconnect_trigger: Box::new(move || {
+                    NatsConnection::trigger_reconnect(stream_conn.clone());
+                }),
+            }.split();
+
+            let (control_tx, control_rx) = mpsc::unbounded();
+            let receiver = NatsClientMultiplexer::new(stream, recon_subs_map.clone(), control_tx.clone());
+            let sender = NatsClientSender::new(sink);
+
+            NatsClient::control_receiver(control_rx, unsub_tx.clone(), recon_client.clone(),
+                                         recon_ping_attempts.clone());
+
+            *recon_client.sender.write() = sender;
+            *recon_client.receiver.write() = receiver;
+            *recon_client.control_tx.write() = control_tx;
+            *recon_client.state.write() = NatsClientState::Connected;
+
+            if let Err(e) = NatsClient::connect(recon_opts.clone()).wait() {
+                error!(target: "ratsio", "Failed to send connect op {:?}", e)
+            }
+
+            if recon_opts.subscribe_on_reconnect {
+                let subs_sender = recon_client.sender.clone();
+                let subs_fut_list: Vec<_> = recon_subs_map.read().iter().map(|(_, sink)| {
+                    subs_sender.read()
+                        .send(Op::SUB(sink.cmd.clone()))
+                        .map_err(|err| {
+                            //TODO ----------
+                            error!(target: "ratsio", "Error re-subscribing {:?}", err);
+                        })
+                }).collect();
+
+
+                let spawner = recon_client.clone().executor.spawner();
+                spawner.spawn(futures::future::join_all(subs_fut_list).map(|_| ()));
+            }
+
+            let cb_client = recon_client.clone();
+            recon_client.reconnect_handlers.read().iter()
+                .for_each(move |(_, handler)| {
+                    (*handler)(cb_client.clone());
                 });
-
-                let ping_client = client.clone();
-                let ping_attempts = Arc::new(ConsistentCounter::new(0));
-                let pong_reset = ping_attempts.clone();
-                let recon_ping_attempts = ping_attempts.clone();
-                NatsClient::control_receiver(control_rx, unsub_tx.clone(), client.clone(), pong_reset);
-
-
-                //Send pings to server to check if we're still connected.
-                tokio::spawn(Interval::new_interval(Duration::from_secs(ping_interval))
-                    .for_each(move |_| {
-                        if *ping_client.state.read() == NatsClientState::Connected {
-                            trace!(target: "ratsio", " Send {:?}", Op::PING);
-                            tokio::spawn(
-                                ping_client.sender.read().send(Op::PING)
-                                    .map_err(|_| ()));
-                            let attempts = ping_attempts.inc();
-                            if attempts >= 1 {
-                                debug!(target: "ratsio", "Skipped a ping.");
-                            }
-
-                            if attempts > ping_max_out {
-                                error!(target: "ratsio", "Pings are not responded to, we may be down.");
-                                *ping_client.state.write() = NatsClientState::Disconnected;
-                                NatsConnection::trigger_reconnect(ping_conn.clone());
-                            }
-                        }
-                        Ok(())
-                    }).map_err(|_| ()));
-
-                let recon_client = client.clone();
-                tokio::spawn(reconnect_handler_rx.for_each(move |conn| {
-                    *recon_client.state.write() = NatsClientState::Reconnecting;
-                    if !recon_opts.subscribe_on_reconnect {
-                        let _: Vec<_> = recon_subs_map.read().iter().map(|(_, sink)| {
-                            let _ = sink.tx.unbounded_send(SinkMessage::CLOSE);
-                            debug!(target: "ratsio", "Closing sink for => {:?}", &sink.cmd.subject);
-                        }).collect();
-                        recon_subs_map.write().clear();
-                    }
-
-                    let _ = recon_client.control_tx.read().unbounded_send(Op::CLOSE);
-                    recon_ping_attempts.reset();
-                    let stream_conn = conn.clone();
-                    let (sink, stream): (NatsSink, NatsStream) = NatsConnSinkStream {
-                        inner: conn.inner.clone(),
-                        state: conn.state.clone(),
-                        reconnect_trigger: Box::new(move || {
-                            NatsConnection::trigger_reconnect(stream_conn.clone());
-                        }),
-                    }.split();
-
-                    let (control_tx, control_rx) = mpsc::unbounded();
-                    let receiver = NatsClientMultiplexer::new(stream, recon_subs_map.clone(), control_tx.clone());
-                    let sender = NatsClientSender::new(sink);
-
-                    NatsClient::control_receiver(control_rx, unsub_tx.clone(), recon_client.clone(),
-                                                 recon_ping_attempts.clone());
-
-                    *recon_client.sender.write() = sender;
-                    *recon_client.receiver.write() = receiver;
-                    *recon_client.control_tx.write() = control_tx;
-                    *recon_client.state.write() = NatsClientState::Connected;
-
-                    if let Err(e) = NatsClient::connect(recon_opts.clone()).wait() {
-                        error!(target: "ratsio", "Failed to send connect op {:?}", e)
-                    }
-
-                    if recon_opts.subscribe_on_reconnect {
-                        let subs_sender = recon_client.sender.clone();
-                        let subs_fut_list: Vec<_> = recon_subs_map.read().iter().map(|(_, sink)| {
-                            subs_sender.read()
-                                .send(Op::SUB(sink.cmd.clone()))
-                                .map_err(|err| {
-                                    //TODO ----------
-                                    error!(target: "ratsio", "Error re-subscribing {:?}", err);
-                                })
-                        }).collect();
-
-                        tokio::spawn(future::join_all(subs_fut_list).map(|_| ()));
-                    }
-
-                    let cb_client = recon_client.clone();
-                    recon_client.reconnect_handlers.read().iter()
-                        .for_each(move |(_, handler)| {
-                            (*handler)(cb_client.clone());
-                        });
-                    Ok(())
-                }));
-                future::ok(client)
-            })
+            Ok(())
+        }));
+        Ok(client)
     }
 
     fn control_receiver(
-        control_rx: UnboundedReceiver<Op>,
-        unsub_tx: UnboundedSender<Op>,
+        control_rx: mpsc::UnboundedReceiver<Op>,
+        unsub_tx: mpsc::UnboundedSender<Op>,
         client: Arc<NatsClient>,
         pong_reset: Arc<ConsistentCounter>,
     ) {
@@ -291,7 +300,8 @@ impl NatsClient {
                 match op {
                     Op::PING => {
                         pong_reset.reset();
-                        tokio::spawn(client.sender.read().send(Op::PONG)
+                        let spawner = client.executor.spawner();
+                        spawner.spawn(client.sender.read().send(Op::PONG)
                             .map(|_| {
                                 debug!(target: "ratsio", "Sent {:?}", Op::PONG);
                             })
@@ -313,19 +323,20 @@ impl NatsClient {
                         }
                         *client.connection.reconnect_hosts.write() = reconnect_hosts;
                         let connect = Self::generate_connect(&client, &server_info);
-                        // Now send a CONNECT protocol message in response to the INFO, required so 
-                        // we can sign the server-supplied nonce if using JWT security.                        
+                        // Now send a CONNECT protocol message in response to the INFO, required so
+                        // we can sign the server-supplied nonce if using JWT security.
                         debug!("Sending CONNECT...");
                         let reconn_client = client.clone();
-                        tokio::spawn(
-                        client
-                            .sender
-                            .read()
-                            .send(Op::CONNECT(connect)).map(move |_| {
-                            *reconn_client.state.write() = NatsClientState::Connected;
-                        }).map_err(|err| {
-                           error!(target: "ratsio", "NATS Server - unable to reconnect - {}", err)
-                        }));
+                        let spawner = client.executor.spawner();
+                        spawner.spawn(
+                            client
+                                .sender
+                                .read()
+                                .send(Op::CONNECT(connect)).map(move |_| {
+                                *reconn_client.state.write() = NatsClientState::Connected;
+                            }).map_err(|err| {
+                                error!(target: "ratsio", "NATS Server - unable to reconnect - {}", err)
+                            }));
                     }
                     Op::ERR(msg) => {
                         error!(target: "ratsio", "NATS Server - Error - {}", msg);
@@ -343,10 +354,11 @@ impl NatsClient {
             .into_future()
             .map(|_| ())
             .map_err(|_| ());
-        tokio::spawn(control_fut);
+        let spawner = client.executor.spawner();
+        spawner.spawn(control_fut);
     }
 
-    // Refactored the original connect method into a function that takes a ServerInfo 
+    // Refactored the original connect method into a function that takes a ServerInfo
     // struct and generates an appropriate Connect message in response.
     fn generate_connect(client: &Arc<Self>, server_info: &ServerInfo) -> Connect {
         let not_empty = |x: &String| !x.is_empty();
@@ -395,48 +407,43 @@ impl NatsClient {
     /// Send a PUB command to the server
     ///
     /// Returns `impl Future<Item = (), Error = RatsioError>`
-    pub fn publish(
+    pub async fn publish(
         &self,
         cmd: Publish,
-    ) -> impl Future<Item=(), Error=RatsioError> + Send + Sync {
-        if let Some(ref server_info) = *self.server_info.read() {
+    ) -> Result<(), RatsioError> {
+        if let Ok(ref server_info) = *self.server_info.read() {
             if cmd.payload.len() > server_info.max_payload {
-                return Either::A(future::err(RatsioError::MaxPayloadOverflow(
+                return Err(RatsioError::MaxPayloadOverflow(
                     server_info.max_payload,
-                )));
+                ));
             }
         }
-
-        Either::B(self.sender.read().send(Op::PUB(cmd)))
+        self.sender.read().send(Op::PUB(cmd)).await
     }
 
     /// Send a UNSUB command to the server and de-register stream in the multiplexer
     ///
     /// Returns `impl Future<Item = (), Error = RatsioError>`
-    pub fn unsubscribe(
+    pub async fn unsubscribe(
         &self,
         cmd: UnSubscribe,
-    ) -> impl Future<Item=(), Error=RatsioError> + Send + Sync {
+    ) -> Result<(), RatsioError> {
         if let Some(max) = cmd.max_msgs {
             if let Some(mut s) = (*self.receiver.read().subs_map.write()).get_mut(&cmd.sid) {
                 s.max_count = Some(max);
             }
         }
 
-        self.sender.read().send(Op::UNSUB(cmd))
+        self.sender.read().send(Op::UNSUB(cmd)).await
     }
 
     /// Send a SUB command and register subscription stream in the multiplexer and return that `Stream` in a future
     ///
     /// Returns `impl Future<Item = impl Stream<Item = Message, Error = RatsioError>>`
-    pub fn subscribe(
+    pub async fn subscribe(
         &self,
         cmd: Subscribe,
-    ) -> impl Future<
-        Item=impl Stream<Item=Message, Error=RatsioError> + Send + Sync,
-        Error=RatsioError,
-    > + Send
-    + Sync {
+    ) -> impl Stream<Item=Message, Error=RatsioError> + Send + Sync {
         let receiver = self.receiver.clone();
         let subs_receiver = self.receiver.clone();
         let sid = cmd.sid.clone();
@@ -470,15 +477,15 @@ impl NatsClient {
         })
     }
 
-    /// Performs a request to the server following the Request/Reply pattern. 
-    /// Returns a future containing the MSG that will be replied at some point by a third party    
-    pub fn request(
+    /// Performs a request to the server following the Request/Reply pattern.
+    /// Returns a future containing the MSG that will be replied at some point by a third party
+    pub async fn request(
         &self,
         subject: String,
         payload: &[u8],
-    ) -> impl Future<Item=Message, Error=RatsioError> + Send + Sync {
-        if let Some(ref server_info) = *self.server_info.read() {
-            if payload.len() > server_info.max_payload {
+    ) -> Result<Message, RatsioError> {
+        if let Ok(ref server_info) = self.server_info.read() {
+            if payload.len() > server_info.unwrap().max_payload {
                 return Either::A(future::err(RatsioError::MaxPayloadOverflow(
                     server_info.max_payload,
                 )));
@@ -510,7 +517,7 @@ impl NatsClient {
         let receiver = self.receiver.clone();
         let stream = self
             .receiver
-            .read()
+            .read().unwrap()
             .for_sid(sub_cmd.clone())
             .take(1)
             .into_future()
@@ -518,20 +525,18 @@ impl NatsClient {
             .and_then(move |(message, _)| {
                 match message {
                     Some(m) => {
-                        receiver.read().remove_sid(&sid);
+                        receiver.read().unwrap().remove_sid(&sid);
                         Ok(m)
                     }
                     None => Err(RatsioError::InnerBrokenChain)
                 }
             });
 
-        Either::B(
-            self.sender
-                .read()
-                .send(Op::SUB(sub_cmd))
-                .and_then(move |_| unsub_sender.read().send(Op::UNSUB(unsub_cmd)))
-                .and_then(move |_| pub_sender.read().send(Op::PUB(pub_cmd)))
-                .and_then(move |_| stream),
-        )
+        self.sender
+            .read().unwrap()
+            .send(Op::SUB(sub_cmd))
+            .and_then(move |_| unsub_sender.read().unwrap().send(Op::UNSUB(unsub_cmd)))
+            .and_then(move |_| pub_sender.read().unwrap().send(Op::PUB(pub_cmd)))
+            .and_then(move |_| stream).await
     }
 }

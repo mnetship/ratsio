@@ -4,39 +4,45 @@ use crate::ops::{Connect, Message, Op, ServerInfo, Subscribe};
 use futures::{
     prelude::*,
     stream,
-    sync::mpsc::{self, UnboundedSender},
     Future, Stream,
 };
-use parking_lot::RwLock;
+
 use std::fmt::Debug;
 use std::{collections::HashMap, sync::Arc};
+use futures::channel::mpsc;
+use std::task::{Context, Poll};
+use std::pin::Pin;
+use futures::executor::LocalPool;
+use futures::task::SpawnExt;
+use std::sync::RwLock;
+use crate::net::connection::{NatsConnection, NatsConnSinkStream};
 
-type NatsSink = stream::SplitSink<NatsConnSinkStream>;
+type NatsSink = stream::SplitSink<NatsConnSinkStream, Op>;
 type NatsStream = stream::SplitStream<NatsConnSinkStream>;
 
 mod client;
 
 #[derive(Clone, Debug)]
 pub struct NatsClientSender {
-    tx: UnboundedSender<Op>,
+    tx: mpsc::UnboundedSender<Op>,
+    executor: Arc<LocalPool>,
 }
 
 impl NatsClientSender {
     fn new(sink: NatsSink) -> Self {
         let (tx, rx) = mpsc::unbounded();
         let rx = rx.map_err(|_| RatsioError::InnerBrokenChain);
-        let work = sink.send_all(rx).map(|_| ()).map_err(|_| ());
-        tokio::spawn(work);
-
-        NatsClientSender { tx }
+        let executor = Arc::new(LocalPool::new());
+        let spawner = executor.spawner();
+        spawner.spawn(rx.forward(sink).map(|_| ()).map_err(|_| ()));
+        NatsClientSender { tx , executor}
     }
     /// Sends an OP to the server
-    pub fn send(&self, op: Op) -> impl Future<Item = (), Error = RatsioError> {
+    pub async fn send(&self, op: Op) -> Result<(), RatsioError> {
         //let _verbose = self.verbose.clone();
         self.tx
             .unbounded_send(op)
             .map_err(|_| RatsioError::InnerBrokenChain)
-            .into_future()
     }
 }
 
@@ -58,6 +64,7 @@ pub(crate) struct SubscriptionSink {
 pub struct NatsClientMultiplexer {
     control_tx: mpsc::UnboundedSender<Op>,
     subs_map: Arc<RwLock<HashMap<String, SubscriptionSink>>>,
+    executor: Arc<LocalPool>,
 }
 
 /// UriVec allows ergonomic use of NatsClientOptions.
@@ -95,7 +102,7 @@ impl From<String> for UriVec {
 
 impl From<&str> for UriVec {
     fn from(x: &str) -> Self {
-        UriVec(vec![x.to_owned()])
+        UriVec(vec![x.into()])
     }
 }
 
@@ -220,17 +227,18 @@ pub struct NatsClient {
     /// Server info
     server_info: Arc<RwLock<Option<ServerInfo>>>,
     /// Stream of the messages that are not caught for subscriptions (only system messages like PING/PONG should be here)
-    unsub_receiver: Box<dyn Stream<Item = Op, Error = RatsioError> + Send + Sync>,
+    unsub_receiver: Box<dyn Stream<Item=Op>>,
     /// Sink part to send commands
     pub sender: Arc<RwLock<NatsClientSender>>,
     /// Subscription multiplexer
     pub receiver: Arc<RwLock<NatsClientMultiplexer>>,
 
     /// For control Ops (PING, PONG, CLOSE, SERVER_INFO) and misc operations.
-    control_tx: Arc<RwLock<UnboundedSender<Op>>>,
+    control_tx: Arc<RwLock<mpsc::UnboundedSender<Op>>>,
 
     state: Arc<RwLock<NatsClientState>>,
     reconnect_handlers: Arc<RwLock<HandlerMap>>,
+    pub(crate) executor: Arc<LocalPool>,
 }
 
 impl ::std::fmt::Debug for NatsClient {
@@ -245,12 +253,14 @@ impl ::std::fmt::Debug for NatsClient {
 }
 
 impl Stream for NatsClient {
-    type Error = RatsioError;
     type Item = Op;
 
-    fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
-        self.unsub_receiver
-            .poll()
-            .map_err(|_| RatsioError::InnerBrokenChain)
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.unsub_receiver.poll_next() {
+            Poll::Ready(Some(Ok(val))) => Poll::Ready(Some(val)),
+            Poll::Ready(Some(Err(err))) => Poll::Ready(None),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
