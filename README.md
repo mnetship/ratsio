@@ -8,7 +8,7 @@ Add the following to your Cargo.toml.
 
 ```rust
 [dependencies]
-ratsio = "^0.3.0.alpha.1"
+ratsio = "0.3.0-alpha.1"
 ```
 Rust -stable, -beta and -nightly are supported.
 
