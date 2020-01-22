@@ -1,10 +1,6 @@
-use ratsio::nats_client::NatsClient;
+use ratsio::{NatsClient, RatsioError};
 use log::info;
 use futures::StreamExt;
-use ratsio::error::RatsioError;
-use prost::Message;
-use ratsio::protocol;
-use ratsio::nuid;
 
 pub fn logger_setup() {
     use log::LevelFilter;
@@ -24,48 +20,53 @@ pub fn logger_setup() {
 }
 
 
-#[tokio::test]
-async fn test1() -> Result<(), RatsioError> {
+#[tokio::main]
+async fn main() -> Result<(), RatsioError> {
     logger_setup();
 
+    //Create nats client
     let nats_client = NatsClient::new("nats://localhost:4222").await?;
+
+    //subscribe to nats subject 'foo'
     let (sid, mut subscription) = nats_client.subscribe("foo").await?;
     tokio::spawn(async move {
+        //Listen for messages on the 'foo' description
+        //The loop terminates when the upon un_subscribe
         while let Some(message) = subscription.next().await {
             info!(" << 1 >> got message --- {:?}\n\t{:?}", &message,
                   String::from_utf8_lossy(message.payload.as_ref()));
         }
+        info!(" << 1 >> unsubscribed. loop is terminated.")
     });
 
+    //subscribe to nats subject 'foo', another subscription
     let (_sid, mut subscription2) = nats_client.subscribe("foo").await?;
     tokio::spawn(async move {
+        //Listen for messages on the 'foo' description
         while let Some(message) = subscription2.next().await {
             info!(" << 2 >> got message --- {:?}\n\t{:?}", &message,
                   String::from_utf8_lossy(message.payload.as_ref()));
         }
     });
 
+    //Publish some messages, restart nats server during this time.
+    //E.g. use 'cargo run --example nats_publish foo "hi there"'
     use std::{thread, time};
     thread::sleep(time::Duration::from_secs(5));
+
+
+    //Publish message
     let _ = nats_client.publish("foo", b"Publish Message 1").await?;
     thread::sleep(time::Duration::from_secs(1));
+
+    //Unsubscribe
     let _ = nats_client.un_subscribe(&sid).await?;
     thread::sleep(time::Duration::from_secs(3));
 
+    //Publish some messages.
     thread::sleep(time::Duration::from_secs(1));
     let _ = nats_client.publish("foo", b"Publish Message 2").await?;
-
-
-    let discover_subject = "_STAN.discover.test-cluster";
-    let client_id = "test-1";
-    let conn_id = nuid::next();
-    let heartbeat_inbox = format!("_HB.{}", &conn_id);
-    let connect_request = protocol::ConnectRequest {
-        client_id: client_id.into(),
-        conn_id: conn_id.clone().as_bytes().into(),
-        heartbeat_inbox: heartbeat_inbox.clone(),
-        ..Default::default()
-    };
-    thread::sleep(time::Duration::from_secs(2));
+    thread::sleep(time::Duration::from_secs(600));
+    info!(" ---- done --- ");
     Ok(())
 }

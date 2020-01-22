@@ -8,207 +8,160 @@ Add the following to your Cargo.toml.
 
 ```rust
 [dependencies]
-ratsio = "^0.2"
+ratsio = "^0.3.0.alpha.1"
 ```
 Rust -stable, -beta and -nightly are supported.
 
 ## Features:
 - [x] Nats messaging queue. Publish, Subcribe and Request.
-- [x] Nats cluster support, auto reconnect and dynamic cluster hosts update.
+- [x] Nats cluster support, auto reconnect 
+- [ ] Dynamic cluster hosts update. 
 - [x] Async from the ground up, using  [tokio](https://crates.io/crates/tokio) and [futures](https://crates.io/crates/futures).
-- [x] TLS mode
+- [?] TLS mode
 - [x] NATS 1.x Authentication
-- [x] NATS 2.0 JWT-based client authentication
+- [?] NATS 2.0 JWT-based client authentication
 - [x] NATS Streaming Server
 # Usage
 
-Subscribing and Publishing to a NATS subject: see tests/nats_client_test.rs
+Subscribing and Publishing to a NATS subject: see examples/nats_subscribe.rs
 ```rust
-    let mut runtime = Runtime::new().unwrap();
-    let options = NatsClientOptions::builder()
-        .cluster_uris(vec!("127.0.0.1:4222".to_string()))
-        .build()
-        .unwrap();
+use ratsio::{NatsClient, RatsioError};
+use log::info;
+use futures::StreamExt;
 
-    let fut = NatsClient::from_options(options)
-        .and_then(|client| NatsClient::connect(&client))
-        .and_then(|client| {
-            client
-                .subscribe(Subscribe::builder().subject("foo".into()).build().unwrap())
-                .map_err(|_| RatsioError::InnerBrokenChain)
-                .and_then(move |stream| {
-                    let _ = client
-                        .publish(Publish::builder().subject("foo".into()).payload(Vec::from(&b"bar"[..])).build().unwrap())
-                        .wait();
+pub fn logger_setup() {
+    use log::LevelFilter;
+    use std::io::Write;
+    use env_logger::Builder;
 
-                    stream
-                        .take(1)
-                        .into_future()
-                        .map(|(maybe_message, _)| maybe_message.unwrap())
-                        .map_err(|_| RatsioError::InnerBrokenChain)
-                })
-        });
-
-    let (tx, rx) = oneshot::channel();
-    runtime.spawn(fut.then(|r| tx.send(r).map_err(|e| panic!("Cannot send Result {:?}", e))));
-    let connection_result = rx.wait().expect("Cannot wait for a result");
-    let _ = runtime.shutdown_now().wait();
-    info!(target: "ratsio", "can_sub_and_pub::connection_result {:#?}", connection_result);
-    assert!(connection_result.is_ok());
-    let msg = connection_result.unwrap();
-    assert_eq!(msg.payload, Vec::from(&b"bar"[..]));
-```
-
-Subscribing and Publishing to a NATS streaming subject: see tests/stan_client_test.rs
-``` rust
-    let mut runtime = Runtime::new().unwrap();
-    let nats_options = NatsClientOptions::builder()
-        .cluster_uris(vec!("127.0.0.1:4222".to_string()))
-        .build()
-        .unwrap();
-    let stan_options = StanOptions::builder()
-        .nats_options(nats_options)
-        .cluster_id("test-cluster")
-        .client_id("main-1").build()
-        .unwrap();
-    let (result_tx, result_rx) = mpsc::unbounded();
-
-    let (stan_client_tx, stan_client_rx) = oneshot::channel();
-    let subject: String = "test.subject".into();
-    let subject1 = subject.clone();
-    let subject2 = subject.clone();
-    let program = StanClient::from_options(stan_options)
-        .and_then(move |stan_client| {
-            let sub = StanSubscribe::builder()
-                .subject(subject1.clone())
-                .start_position(StartPosition::NewOnly)
-                .build().unwrap();
-            stan_client
-                .subscribe(sub, SyncHandler(Box::new(move |stan_msg: StanMessage| {
-                    info!(target: "ratsio", " GOT :::: {:?}", stan_msg);
-                    tokio::spawn(result_tx.clone().send(stan_msg).into_future()
-                        .map(|_| ()).map_err(|_| ()));
-                    Ok(())
-                })))
-                .and_then(move |_| Ok(stan_client))
+    let _ = Builder::new()
+        .format(|buf, record| {
+            writeln!(buf,
+                     "[{}] - {}",
+                     record.level(),
+                     record.args()
+            )
         })
-        .and_then(move |stan_client| {
-            let stan_msg = StanMessage::new(subject2.clone(), Vec::from(&b"hello"[..]));
-            stan_client.send(stan_msg).map(|_| stan_client)
-        })
-        .map_err(|_| ())
-        .and_then(|stan_client| {
-            stan_client_tx.send(stan_client)
-                .into_future()
-                .map(|_| ())
-                .map_err(|_| ())
-        }).map_err(|_| ());
+        .filter(None, LevelFilter::Trace)
+        .try_init();
+}
 
-    runtime.spawn(program);
 
-    let stan_client = stan_client_rx.wait().expect(" No STAN Client");
+#[tokio::main]
+async fn main() -> Result<(), RatsioError> {
+    logger_setup();
 
-    match result_rx.wait().next().expect("Cannot wait for a result") {
-        Ok(stan_msg) => {
-            info!(target: "ratsio", "Got stan_msg {:?}", stan_msg);
-            assert_eq!(stan_msg.subject, subject);
-            assert_eq!(stan_msg.payload, Vec::from(&b"hello"[..]));
-        }
-        Err(_) => {
-            assert!(false);
-        }
-    };
-
-    let (close_tx, close_rx) = oneshot::channel();
-    runtime.spawn(stan_client.close()
-        .and_then(|_| close_tx
-            .send(true).into_future()
-            .map(|_| ())
-            .map_err(|_| ()))
-    );
-
-    let _ = close_rx.wait().expect(" Could not close STAN Client");
-    let _ = runtime.shutdown_now().wait();
-```
-#  Important Changes
-
-### Version 0.2
-Users no longer need to use ratsio::ops::Connect struct when configuring a connection. Options are now availabble
-on NatsClientOptions, username, password, tls_required, auth_token, etc
-
-For example
-``` rust
-    let nats_options = NatsClientOptions::builder()
-        .username("user")
-        .password("password")
-        .cluster_uris(vec!("127.0.0.1:4222"))
-        .build()
-        .unwrap();
-```
-Internal nuid fork from [nuid](https://github.com/casualjim/rs-nuid) upgraded to use [rand](https://crates.io/crates/rand) version ^0.6
-
-### Version 0.2.1
-More ergonomics when creating options. A bit easier on the eye.
-
-It is now possible to pass either of String, &str, Vec<String> or Vec<&str> to cluster_uris(...) on NatsClientOptions::builder(), use
-```use ratsio::prelude::VecUri;``` or just ```use ratsio::prelude::*;```
-``` rust
-    let nats_options = NatsClientOptions::builder()
-        .username("user")
-        .password("password")
-        .cluster_uris(vec!("127.0.0.1:4222"))
-        .build()
-        .unwrap();
-```
-or
-``` rust
-    let nats_options = NatsClientOptions::builder()
-        .username("user")
-        .password("password")
-        .cluster_uris("127.0.0.1:4222") // For 1 url
-        .build()
-        .unwrap();
-```
-### Version 0.2.2
-Bug fixes: 
- 1. Send connect op when reconnecting, thanks to David McNeil
-
-# Version 0.3.0 
-Merged the `from_options` and `connect` methods because `from_options` was actually making a TCP connection, and so its 
-name was misleading. Further, the new client now properly awaits the `INFO` pre-amble from the server before supplying the 
-`CONNECT` message.
-
-Added support for NATS 2.0 client authentication via JWTs and [nkeys](https://github.com/nats-io/nkeys). You can now pass a 
-`UserJWT` option along with a callback used to sign a `nonce` (a small random string the server uses to verify that the client
-does possess the private key), as shown in the following example:
-
-```rust
-    let raw_jwt = String::from("--Encoded JWT goes here--");
-    let opt_jwt = UserJWT::new(raw_jwt, Arc::new(sign_nonce));
+    //Create nats client
+    let nats_client = NatsClient::new("nats://localhost:4222").await?;
     
-    let mut runtime = Runtime::new().unwrap();
-    let options = NatsClientOptions::builder()
-        .cluster_uris(vec!["127.0.0.1:4222"])
-        .user_jwt(opt_jwt)
-        .build()
-        .unwrap();
+    //subscribe to nats subject 'foo'
+    let (sid, mut subscription) = nats_client.subscribe("foo").await?;
+    tokio::spawn(async move {
+        //Listen for messages on the 'foo' description 
+        //The loop terminates when the upon un_subscribe
+        while let Some(message) = subscription.next().await {
+            info!(" << 1 >> got message --- {:?}\n\t{:?}", &message,
+                  String::from_utf8_lossy(message.payload.as_ref()));
+        }
+        info!(" << 1 >> unsubscribed. loop is terminated.")
+    });
 
-    let client = NatsClient::connect(options);
-```
+    //subscribe to nats subject 'foo', another subscription 
+    let (_sid, mut subscription2) = nats_client.subscribe("foo").await?;
+    tokio::spawn(async move {
+        //Listen for messages on the 'foo' description
+        while let Some(message) = subscription2.next().await {
+            info!(" << 2 >> got message --- {:?}\n\t{:?}", &message,
+                  String::from_utf8_lossy(message.payload.as_ref()));
+        }
+    });
 
-And here's what a sample `sign_nonce` function looks like:
+    //Publish some messages, restart nats server during this time.
+    use std::{thread, time};
+    thread::sleep(time::Duration::from_secs(5));
 
-```rust
-fn sign_nonce(nonce: &[u8]) -> Result<Vec<u8>, Box<std::error::Error>> { 
-    let raw_nkey = "--secret/seed key goes here--";
-    let kp = nkeys::KeyPair::from_seed(raw_nkey).unwrap();
-    Ok(kp.sign(nonce).unwrap())
+
+    //Publish message
+    let _ = nats_client.publish("foo", b"Publish Message 1").await?;
+    thread::sleep(time::Duration::from_secs(1));
+
+    //Unsubscribe
+    let _ = nats_client.un_subscribe(&sid).await?;
+    thread::sleep(time::Duration::from_secs(3));
+
+    //Publish some messages.
+    thread::sleep(time::Duration::from_secs(1));
+    let _ = nats_client.publish("foo", b"Publish Message 2").await?;
+    thread::sleep(time::Duration::from_secs(600));
+    info!(" ---- done --- ");
+    Ok(())
 }
 ```
 
-At the moment, you have to define your own callback to ensure that your code can manage the lifetime of the seed key in a 
-way that is hopefully short-lived. If the NATS client library managed your seed key lifetime, it would have to enforce a
-`'static` guarantee, which isn't the most secure approach.
+Subscribing and Publishing to a NATS streaming subject: see tests/stan_subscribe.rs
+``` rust
+use log::info;
+use futures::StreamExt;
+use ratsio::{RatsioError, StanClient, StanOptions};
+
+pub fn logger_setup() {
+    use log::LevelFilter;
+    use std::io::Write;
+    use env_logger::Builder;
+
+    let _ = Builder::new()
+        .format(|buf, record| {
+            writeln!(buf,
+                     "[{}] - {}",
+                     record.level(),
+                     record.args()
+            )
+        })
+        .filter(None, LevelFilter::Trace)
+        .try_init();
+}
+
+
+#[tokio::main]
+async fn main() -> Result<(), RatsioError> {
+    logger_setup();
+    // Create stan options
+    let client_id = "test1".to_string();
+    let opts = StanOptions::with_options("localhost:4222", "test-cluster", &client_id[..]);
+    //Create STAN client
+    let stan_client = StanClient::from_options(opts).await?;
+    
+    //Subscribe to STAN subject 'foo'
+    let (sid, mut subscription) = stan_client.subscribe("foo", None, None).await?;
+    tokio::spawn(async move {
+        while let Some(message) = subscription.next().await {
+            info!(" << 1 >> got stan message --- {:?}\n\t{:?}", &message,
+                  String::from_utf8_lossy(message.payload.as_ref()));
+        }
+        info!(" ----- the subscription loop is done ---- ")
+    });
+    
+    //Publish some mesesages to 'foo', use 'cargo run --example stan_publish foo "hi there"' 
+    use std::{thread, time};
+    thread::sleep(time::Duration::from_secs(60));
+    
+    //Unsubscribe 
+    let _ = stan_client.un_subscribe(&sid).await;
+    thread::sleep(time::Duration::from_secs(10));
+    info!(" ---- done --- ");
+    Ok(())
+}    
+```
+#  Important Changes
+
+## Version 0.2
+All version 0.2.* related information is available here [Version 0.2.*](https://github.com/mnetship/ratsio/tree/ratsio-0.2https://github.com/mnetship/ratsio/tree/ratsio-0.2). 
+
+## Version 0.3.0.alpha.1
+Breaking API changes from 0.2
+This is the first async/await compatible version, it's not production ready yet, still work in progress.
+See examples in examples/ folder.
+
 
 # Contact
 For bug reports, patches, feature requests or other messages, please send a mail to michael@zulzi.com

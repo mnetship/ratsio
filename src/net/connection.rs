@@ -1,18 +1,29 @@
+/*
 use crate::error::RatsioError;
 use crate::ops::Op;
-use futures::{
-    future::{self, Either, Loop, loop_fn},
-    prelude::*,
-};
-use parking_lot::RwLock;
+use futures::{future::{self, Either}, prelude::*, SinkExt};
+
 use std::{
     net::{SocketAddr, ToSocketAddrs},
     str::FromStr,
     sync::Arc,
 };
-use super::connection_inner::NatsConnectionInner;
-use super::ReconnectHandler;
+use futures::channel::mpsc::UnboundedSender;
+
+pub(crate) type ReconnectHandler = UnboundedSender<Arc<NatsConnection>>;
+
+use std::task::{Context, Poll};
+use std::pin::Pin;
+use futures::executor::LocalPool;
+use futures::task::{LocalSpawnExt, SpawnExt};
+use std::sync::RwLock;
+use crate::net::nats_tcp_stream::NatsTcpStream;
+use futures::stream::{SplitSink, SplitStream};
+use futures::task;
 use url::Url;
+use futures_timer::Delay;
+use std::ops::Add;
+use pin_project::{pin_project, project};
 
 /// State of the raw connection
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,35 +63,32 @@ pub struct NatsConnSinkStream {
     pub(crate) reconnect_trigger: Box<Fn() -> () + Sync + Send>,
 }
 
+type NatsConnectionInner = (SplitSink<NatsTcpStream, Op>, SplitStream<NatsTcpStream>);
 
 impl NatsConnection {
     /// Connect to a raw TCP socket
-    fn connect(addr: SocketAddr) -> impl Future<Item=NatsConnectionInner, Error=RatsioError> {
-        NatsConnectionInner::connect_tcp(&addr).map(move |socket| {
-            debug!(target: "ratsio", "Got a socket successfully.");
-            socket.into()
-        })
+    async fn connect(addr: SocketAddr) -> Result<NatsConnectionInner, RatsioError> {
+        let tcp_stream = tokio::net::TcpStream::connect(&addr).await?;
+        let (write_stream, read_stream) = NatsTcpStream::new(tcp_stream).await.split();
+        debug!(target: "ratsio", "Got a socket successfully.");
+        Ok((write_stream, read_stream).into())
     }
 
     /// Connect to a TLS over TCP socket. Upgrade is performed automatically
-    fn connect_tls(host: String, addr: SocketAddr) -> impl Future<Item=NatsConnectionInner, Error=RatsioError> {
-        NatsConnectionInner::connect_tcp(&addr)
-            .and_then(move |socket| {
-                debug!(target: "ratsio", "Got a socket successfully, upgrading to TLS");
-                NatsConnectionInner::upgrade_tcp_to_tls(&host, socket)
-            })
-            .map(move |socket| {
-                socket.into()
-            })
+    async fn connect_tls(host: String, addr: SocketAddr) -> Result<NatsConnectionInner, RatsioError> {
+        let tcp_stream = tokio::net::TcpStream::connect(&addr).await?;
+        let (write_stream, read_stream) = NatsTcpStream::new(tcp_stream).await.split();
+        debug!(target: "ratsio", "Got a socket successfully.");
+        Ok((write_stream, read_stream).into())
     }
 
     /// Tries to reconnect once to the server; Only used internally. Blocks polling during reconnecting
     /// by forcing the object to return `Async::NotReady`/`AsyncSink::NotReady`
     pub(crate) fn trigger_reconnect(conn: Arc<Self>) {
         trace!(target: "ratsio", "Trigger reconnection ");
-        let connect_version = conn.state.read().1;
+        let connect_version = conn.state.read().unwrap().1;
         {
-            let mut state_guard = conn.state.write();
+            let mut state_guard = conn.state.write().unwrap();
             if state_guard.0 == NatsConnectionState::Reconnecting {
                 // Another thread is busy reconnecting...
                 trace!(target: "ratsio", "Already reconnection, nothing to do");
@@ -100,7 +108,7 @@ impl NatsConnection {
     fn reconnect(conn: Arc<Self>) {
         trace!(target: "ratsio", "Reconnecting");
         {
-            let mut state_guard = conn.state.write();
+            let mut state_guard = conn.state.write().unwrap();
             if state_guard.0 == NatsConnectionState::Disconnected {
                 *state_guard = (NatsConnectionState::Reconnecting, state_guard.1);
             } else {
@@ -108,57 +116,49 @@ impl NatsConnection {
             }
         }
 
-        let cluster_addrs: Vec<_> = NatsConnection::parse_uris(&conn.reconnect_hosts.read());
-        trace!(target: "ratsio", "Retrying {:?}", &*conn.reconnect_hosts.read());
+        let cluster_addrs: Vec<_> = NatsConnection::parse_uris(&conn.reconnect_hosts.read().unwrap());
+        trace!(target: "ratsio", "Retrying {:?}", &*conn.reconnect_hosts.read().unwrap());
 
-        tokio::spawn(NatsConnection::get_conn_inner(cluster_addrs, conn.is_tls)
-            .then(move |inner_result| {
-                let connect_version = (*conn.state.read()).1;
-                let retry_conn = conn.clone();
-                match inner_result {
-                    Ok(new_inner) => {
-                        *conn.inner.write() = new_inner;
-                        *conn.state.write() = (NatsConnectionState::Connected, connect_version + 1);
-                        let _ = conn.reconnect_handler.unbounded_send(conn.clone());
-                        debug!(target: "ratsio", "Got a connection");
-                        Either::A(future::ok(()))
-                    }
-                    Err(err) => {
-                        error!(target: "ratsio", "Error reconnecting :: {:?}", err);
-                        *retry_conn.state.write() = (NatsConnectionState::Disconnected, connect_version);
-                        //Rescedule another attempt
-                        use tokio::timer::Delay;
-                        use std::time::{Instant, Duration};
+        let mut executor = LocalPool::new();
+        let spawner = executor.spawner();
+        spawner.spawn(async move {
+            let inner_result = NatsConnection::get_conn_inner(cluster_addrs, conn.is_tls).await;
 
-                        let when = Instant::now() + Duration::from_millis(retry_conn.reconnect_timeout);
-                        let task = Delay::new(when)
-                            .and_then(move |_| {
-                                NatsConnection::trigger_reconnect(retry_conn);
-                                Ok(())
-                            })
-                            .map_err(|err| error!(target: "ratsio", "Error scheduling reconnect attempt {:?}", err));
-                        Either::B(task)
-                    }
+            let connect_version = (*conn.state.read().unwrap()).1;
+            let retry_conn = conn.clone();
+            match inner_result {
+                Ok(new_inner) => {
+                    *conn.inner.write().unwrap() = new_inner;
+                    *conn.state.write().unwrap() = (NatsConnectionState::Connected, connect_version + 1);
+                    let _ = conn.reconnect_handler.unbounded_send(conn.clone());
+                    debug!(target: "ratsio", "Got a connection");
                 }
-            }));
+                Err(err) => {
+                    error!(target: "ratsio", "Error reconnecting :: {:?}", err);
+                    *retry_conn.state.write().unwrap() = (NatsConnectionState::Disconnected, connect_version);
+                    //Rescedule another attempt
+                    use std::time::{Instant, Duration};
+                    let _ = Delay::new(Duration::from_millis(retry_conn.reconnect_timeout)).await;
+                    NatsConnection::trigger_reconnect(retry_conn);
+                }
+            };
+        });
     }
 
-    pub fn create_connection(reconnect_handler: ReconnectHandler, reconnect_timeout: u64,
-                             cluster_uris: &[String], tls_required: bool) -> impl Future<Item=NatsConnection, Error=RatsioError> {
+    pub async fn create_connection(reconnect_handler: ReconnectHandler, reconnect_timeout: u64,
+                                   cluster_uris: &[String], tls_required: bool) -> Result<NatsConnection, RatsioError> {
         let cluster_addrs = NatsConnection::parse_uris(cluster_uris);
         let init_hosts = cluster_uris.to_vec();
-        NatsConnection::get_conn_inner(cluster_addrs, tls_required)
-            .map(move |inner| {
-                NatsConnection {
-                    is_tls: tls_required,
-                    state: Arc::new(RwLock::new((NatsConnectionState::Connected, 0))),
-                    inner: Arc::new(RwLock::new(inner)),
-                    init_hosts: init_hosts.clone(),
-                    reconnect_hosts: RwLock::new(init_hosts),
-                    reconnect_handler,
-                    reconnect_timeout,
-                }
-            })
+        let inner = NatsConnection::get_conn_inner(cluster_addrs, tls_required).await?;
+        Ok(NatsConnection {
+            is_tls: tls_required,
+            state: Arc::new(RwLock::new((NatsConnectionState::Connected, 0))),
+            inner: Arc::new(RwLock::new(inner)),
+            init_hosts: init_hosts.clone(),
+            reconnect_hosts: RwLock::new(init_hosts),
+            reconnect_handler,
+            reconnect_timeout,
+        })
     }
 
     pub fn parse_uris(cluster_uris: &[String]) -> Vec<(Url, SocketAddr)> {
@@ -206,120 +206,136 @@ impl NatsConnection {
     }
 
 
-    fn get_conn_inner(cluster_addrs: Vec<(Url, SocketAddr)>, tls_required: bool)
-                      -> impl Future<Item=(Url, NatsConnectionInner), Error=RatsioError> {
+    async fn get_conn_inner(cluster_addrs: Vec<(Url, SocketAddr)>, tls_required: bool)
+                            -> Result<(Url, NatsConnectionInner), RatsioError> {
         if cluster_addrs.is_empty() {
             warn!("No addresses to connect to.");
-            return Either::A(future::err(RatsioError::NoRouteToHostError));
+            return Err(RatsioError::NoRouteToHostError);
         }
-        fn get_conn_step(cluster_addrs: &[(Url, SocketAddr)], tls_required: bool)
-                         -> impl Future<Item=(Url, NatsConnectionInner), Error=RatsioError> {
+        async fn get_conn_step(cluster_addrs: &[(Url, SocketAddr)], tls_required: bool)
+                               -> Result<(Url, NatsConnectionInner), RatsioError> {
             if cluster_addrs.is_empty() {
-                Either::A(future::err::<(Url, NatsConnectionInner), RatsioError>(RatsioError::NoRouteToHostError))
+                Err(RatsioError::NoRouteToHostError)
             } else {
-                Either::B(future::ok(cluster_addrs[0].clone())
-                    .and_then(move |(node_url, node_addr)| {
-                        if tls_required {
-                            match node_url.host_str() {
-                                Some(host) => future::ok(Either::B(NatsConnection::connect_tls(host.to_string(), node_addr)
-                                    .map(move |con| (node_url.clone(), con)))),
-                                None => future::err(RatsioError::NoRouteToHostError),
-                            }
-                        } else {
-                            future::ok(Either::A(NatsConnection::connect(node_addr)
-                                .map(move |con| (node_url.clone(), con))))
+                let (node_url, node_addr) = cluster_addrs[0].clone();
+                if tls_required {
+                    match node_url.host_str() {
+                        Some(host) => {
+                            let conn = NatsConnection::connect_tls(host.to_string(), node_addr).await?;
+                            Ok((node_url.clone(), conn))
                         }
-                    })
-                    .flatten())
+                        None => Err(RatsioError::NoRouteToHostError),
+                    }
+                } else {
+                    let conn = NatsConnection::connect(node_addr).await?;
+                    Ok((node_url.clone(), conn))
+                }
             }
         }
-        Either::B(loop_fn(cluster_addrs,
-                          move |cluster_addrs| {
-                              let rem_addrs = Vec::from(&cluster_addrs[1..]).clone();
-                              get_conn_step(&cluster_addrs[..], tls_required)
-                                  .and_then(move |inner| {
-                                      Ok(Loop::Break(inner))
-                                  })
-                                  .or_else(move |_err| {
-                                      if rem_addrs.is_empty() {
-                                          Err(RatsioError::NoRouteToHostError)
-                                      } else {
-                                          Ok(Loop::Continue(rem_addrs))
-                                      }
-                                  })
-                          }))
+        let mut cluster_addrs = cluster_addrs;
+        loop {
+            match get_conn_step(&cluster_addrs[..], tls_required).await {
+                Ok(inner) => {
+                    return Ok(inner);
+                }
+                Err(err) => {
+                    let rem_addrs = Vec::from(&cluster_addrs[1..]).clone();
+                    if rem_addrs.is_empty() {
+                        return Err(RatsioError::NoRouteToHostError);
+                    } else {
+                        cluster_addrs = rem_addrs
+                    }
+                }
+            }
+        }
     }
 }
 
-impl Sink for NatsConnSinkStream {
-    type SinkError = RatsioError;
-    type SinkItem = Op;
+impl Sink<Op> for NatsConnSinkStream {
+    type Error = RatsioError;
 
-    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+    fn start_send(self: Pin<&mut Self>, item: Op) -> Result<(), Self::Error> {
         if match self.state.try_read() {
-            Some(state) => (*state).0 != NatsConnectionState::Connected,
+            Ok(state) => (*state).0 != NatsConnectionState::Connected,
             _ => true,
         } {
-            return Ok(AsyncSink::NotReady(item));
+            return Err(RatsioError::ServerDisconnected(None));
         }
 
-        if let Some(mut inner) = self.inner.try_write() {
-            match (*inner).1.start_send(item.clone()) {
+        if let Ok(mut inner) = self.inner.write() {
+            //let mut sink = &mut ((*inner).1).0;
+            match Sink::start_send(Pin::new(&mut ((*inner).1).0), item) {
                 Err(RatsioError::ServerDisconnected(_)) => {
                     (*self.reconnect_trigger)();
-                    Ok(AsyncSink::NotReady(item))
+                    Ok(())
                 }
                 poll_res => poll_res,
             }
         } else {
-            Ok(AsyncSink::NotReady(item))
+            Err(RatsioError::ServerDisconnected(None))
         }
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        if match self.state.try_read() {
-            Some(state) => (*state).0 != NatsConnectionState::Connected,
-            _ => true,
-        } {
-            return Ok(Async::NotReady);
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        match self.state.try_read() {
+            Ok(state) =>
+                if (*state).0 != NatsConnectionState::Connected {
+                    //TODO check underlying connection for readiness Sink::poll_ready(Pin::new(&mut ((*inner).1).0), cx)
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            _ =>
+                Poll::Pending
         }
+    }
 
-        if let Some(mut inner) = self.inner.try_write() {
-            match (*inner).1.poll_complete() {
-                Err(RatsioError::ServerDisconnected(_)) => {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        if let Ok(mut inner) = self.inner.write() {
+            match Sink::poll_flush(Pin::new(&mut ((*inner).1).0), cx) {
+                Poll::Ready(Err(RatsioError::ServerDisconnected(_))) => {
                     (*self.reconnect_trigger)();
-                    Ok(Async::NotReady)
+                    Poll::Pending
                 }
                 poll_res => poll_res,
             }
         } else {
-            Ok(Async::NotReady)
+            Poll::Pending
+        }
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        if let Ok(mut inner) = self.inner.try_write() {
+            match Sink::poll_close(Pin::new(&mut ((*inner).1).0), cx){
+                Poll::Ready(Err(RatsioError::ServerDisconnected(_))) => {
+                    (*self.reconnect_trigger)();
+                    Poll::Pending
+                }
+                poll_res => poll_res,
+            }
+        } else {
+            Poll::Pending
         }
     }
 }
 
 impl Stream for NatsConnSinkStream {
-    type Error = RatsioError;
     type Item = Op;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if match self.state.try_read() {
-            Some(state) => (*state).0 != NatsConnectionState::Connected,
+            Ok(state) => (*state).0 != NatsConnectionState::Connected,
             _ => true,
         } {
-            return Ok(Async::NotReady);
+            return Poll::Pending;
         }
 
-        if let Some(mut inner) = self.inner.try_write() {
-            match (*inner).1.poll() {
-                Err(RatsioError::ServerDisconnected(_)) => {
-                    (*self.reconnect_trigger)();
-                    Ok(Async::NotReady)
-                }
-                poll_res => poll_res,
-            }
+        if let Ok(mut inner) = self.inner.try_write() {
+            (Pin::new(&mut ((*inner).1).1)).poll_next(cx)
         } else {
-            Ok(Async::NotReady)
+            Poll::Pending
         }
     }
 }
+*/

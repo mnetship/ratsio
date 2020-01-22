@@ -1,19 +1,17 @@
-use crate::nats_client::{NatsClient, NatsClientOptions};
-use futures::{
-    Future,
-    sync::mpsc,
-};
+use crate::nats_client::{NatsClient, NatsClientOptions, NatsSid, ClosableMessage};
 use crate::nuid::NUID;
-use parking_lot::RwLock;
+
 use std::{
     collections::HashMap,
     sync::{
         Arc,
-        atomic::AtomicBool,
+        RwLock,
     },
 };
-mod client;
-mod subscription;
+use tokio::sync::mpsc::UnboundedSender;
+use failure::_core::fmt::{Debug, Formatter, Error};
+
+pub mod client;
 
 // DefaultConnectWait is the default timeout used for the connect operation
 //const DEFAULT_CONNECT_WAIT: u64 = 2 * 60000;
@@ -49,20 +47,28 @@ pub struct StanOptions {
     pub ack_prefix: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct StanSid(pub(crate) NatsSid);
+
+
 impl StanOptions {
-    pub fn new(cluster_id: String, client_id: String) -> StanOptions {
-        let mut options = StanOptions::default();
-        options.client_id = client_id;
-        options.cluster_id = cluster_id;
-        options
+    pub fn new<S>(cluster_id: S, client_id: S) -> StanOptions where S: ToString{
+        StanOptions{
+            client_id: client_id.to_string(),
+            cluster_id: cluster_id.to_string(),
+            ..Default::default()
+        }
     }
 
-    pub fn with_options(nats_options: NatsClientOptions, cluster_id: String, client_id: String) -> StanOptions {
-        let mut options = StanOptions::default();
-        options.client_id = client_id;
-        options.cluster_id = cluster_id;
-        options.nats_options = nats_options;
-        options
+    pub fn with_options<T, S>(nats_options: T, cluster_id: S, client_id: S) -> StanOptions
+        where T: Into<NatsClientOptions> ,
+            S: ToString{
+        StanOptions{
+            client_id: client_id.to_string(),
+            cluster_id: cluster_id.to_string(),
+            nats_options: nats_options.into(),
+            ..Default::default()
+        }
     }
     pub fn builder() -> StanOptionsBuilder {
         StanOptionsBuilder::default()
@@ -86,7 +92,22 @@ impl Default for StanOptions {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Builder)]
+pub(crate) struct AckHandler(Box<dyn Fn() -> () + Send + Sync>);
+
+
+impl Drop for AckHandler {
+    fn drop(&mut self) {
+        self.0()
+    }
+}
+
+impl Debug for AckHandler {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        f.write_str("<ack-handler>")
+    }
+}
+
+#[derive(Debug, Builder)]
 #[builder(default)]
 pub struct StanMessage {
     pub subject: String,
@@ -96,6 +117,8 @@ pub struct StanMessage {
     pub sequence: u64,
     pub redelivered: bool,
     pub ack_inbox: Option<String>,
+    #[builder(setter(skip))]
+    ack_handler: Option<AckHandler>,
 }
 
 impl StanMessage {
@@ -108,6 +131,7 @@ impl StanMessage {
             sequence: 0,
             redelivered: false,
             ack_inbox: None,
+            ack_handler: None,
         }
     }
 
@@ -120,6 +144,7 @@ impl StanMessage {
             sequence: 0,
             redelivered: false,
             ack_inbox: None,
+            ack_handler: None,
         }
     }
 
@@ -133,7 +158,7 @@ impl Default for StanMessage {
         use std::time::{SystemTime, UNIX_EPOCH};
         let now = SystemTime::now();
         let tstamp = now.duration_since(UNIX_EPOCH).unwrap();
-        let tstamp_ms = tstamp.as_secs() as i64 * 1000 + i64::from(tstamp.subsec_millis());
+        let tstamp_ms = tstamp.as_millis() as i64;
         StanMessage {
             subject: String::new(),
             reply_to: None,
@@ -142,9 +167,26 @@ impl Default for StanMessage {
             sequence: 0,
             redelivered: false,
             ack_inbox: None,
+            ack_handler: None,
         }
     }
 }
+
+impl Clone for StanMessage {
+    fn clone(&self) -> Self {
+        StanMessage {
+            subject: self.subject.clone(),
+            reply_to: self.reply_to.clone(),
+            payload: self.payload.clone(),
+            timestamp: self.timestamp,
+            sequence: self.sequence,
+            redelivered: self.redelivered,
+            ack_inbox: self.ack_inbox.clone(),
+            ack_handler: None,
+        }
+    }
+}
+
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum StartPosition {
@@ -196,44 +238,35 @@ impl Default for StanSubscribe {
     }
 }
 
-pub struct Subscription {
-    subscription_id: String,
+#[derive(Clone)]
+struct Subscription {
     client_id: String,
+    subject: String,
+    queue_group: Option<String>,
+    durable_name: Option<String>,
+    max_in_flight: i32,
+    ack_wait_in_secs: i32,
     inbox: String,
     ack_inbox: String,
-    nats_client: Arc<NatsClient>,
     unsub_requests: String,
     close_requests: String,
-    is_closed: AtomicBool,
-    unsub_tx: mpsc::UnboundedSender<String>,
-    handler: Arc<SubscriptionHandler>,
-    cmd: StanSubscribe,
+    sender: UnboundedSender<ClosableMessage>,
 }
 
 pub struct StanClient {
     //subs_tx: Arc<RwLock<HashMap<String, Subscription>>>,
     pub options: StanOptions,
-
     pub nats_client: Arc<NatsClient>,
     pub client_id: String,
 
-    pub client_info: Arc<RwLock<ClientInfo>>,
-
-    pub_ack_map: Arc<RwLock<HashMap<String, u64>>>,
+    client_info: Arc<RwLock<ClientInfo>>,
     id_generator: Arc<RwLock<NUID>>,
-    conn_id: Arc<RwLock<Vec<u8>>>,
-
-    subscriptions: Arc<RwLock<HashMap<String, Arc<Subscription>>>>,
-
-    pub ping_max_out: i32,
-    pub ping_interval: i32,
-
-    pub protocol: i32,
-    pub public_key: String,
-    unsub_tx: mpsc::UnboundedSender<String>,
+    conn_id: RwLock<Vec<u8>>,
+    subscriptions: RwLock<HashMap<String, Subscription>>,
+    self_reference: RwLock<Option<Arc<StanClient>>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ClientInfo {
     pub_prefix: String,
     sub_requests: String,
@@ -241,12 +274,5 @@ pub struct ClientInfo {
     sub_close_requests: String,
     close_requests: String,
     ping_requests: String,
+    public_key: String,
 }
-
-pub struct AsyncHandler(pub Box<Fn(StanMessage) -> Box<Future<Item=(), Error=()> + Send + Sync> + Send + Sync>);
-
-pub struct SyncHandler(pub Box<Fn(StanMessage) -> Result<(), ()> + Send + Sync>);
-
-pub type Handler = Fn(StanMessage, Arc<Subscription>, Arc<NatsClient>) -> Result<(), ()> + Send + Sync;
-
-pub struct SubscriptionHandler(Box<Handler>);

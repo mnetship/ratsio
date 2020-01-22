@@ -3,6 +3,7 @@ use crate::nuid::NUID;
 use bytes::{BufMut, Bytes, BytesMut};
 use std::collections::HashMap;
 use std::convert::From;
+use ::std::fmt;
 
 #[derive(Debug, PartialEq)]
 pub enum JsonValue {
@@ -87,8 +88,7 @@ macro_rules! get_json_boolean {
 /// * connect_urls : An optional list of server urls that a client can connect to.
 ///
 ///
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde()]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ServerInfo {
     pub server_id: String,
     pub version: String,
@@ -101,7 +101,6 @@ pub struct ServerInfo {
     pub auth_required: bool,
     pub tls_required: bool,
     pub tls_verify: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub connect_urls: Vec<String>,
     pub nonce: String,
 }
@@ -123,6 +122,40 @@ impl Default for ServerInfo {
             connect_urls: Vec::new(),
             nonce: "".to_string(),
         }
+    }
+}
+
+impl ToString for ServerInfo {
+    fn to_string(&self) -> String {
+        let mut buff = String::default();
+        buff.push_str(&format!(r#"{{"server_id": "{}""#, &self.server_id));
+        buff.push_str(&format!(r#","version": "{}""#, self.version));
+        buff.push_str(&format!(r#","go": "{}""#, self.go));
+        buff.push_str(&format!(r#","host": "{}""#, self.go));
+        buff.push_str(&format!(r#","port": {}"#, self.port));
+        buff.push_str(&format!(r#","max_payload": {}"#, self.max_payload));
+        buff.push_str(&format!(r#","proto": {}"#, self.proto));
+        buff.push_str(&format!(r#","client_id": {}"#, self.client_id));
+        buff.push_str(&format!(r#","auth_required": {}"#, self.auth_required));
+        buff.push_str(&format!(r#","tls_required": {}"#, self.tls_required));
+        buff.push_str(&format!(r#","tls_verify": {}"#, self.tls_verify));
+
+        if self.connect_urls.len() > 0 {
+            buff.push_str(r#","connect_urls": ["#);
+            let xs = self.connect_urls.clone().into_iter().fold(String::default(), |acc, url| {
+                if acc.len() > 0 {
+                    format!(r#"{}, "{}""#, acc, url)
+                } else {
+                    format!(r#""{}""#, url)
+                }
+            });
+            buff.push_str(&xs);
+            buff.push_str(r#","]"#);
+        }
+        buff.push_str(&format!(r#","nonce": {}"#, self.nonce));
+
+        buff.push_str("}");
+        buff
     }
 }
 
@@ -179,36 +212,59 @@ impl From<JsonValue> for ServerInfo {
 /// * sig: A signature produced from the nonce the server sent with its INFO message (if using JWT security)
 /// * protocol: optional int. Sending 0 (or absent) indicates client supports original protocol. Sending 1 indicates that the client supports dynamic reconfiguration of cluster topology changes by asynchronously receiving INFO messages with known servers it can reconnect to.
 /// * echo: Optional boolean. If set to true, the server (version 1.2.0+) will not send originating messages from this connection to its own subscriptions. Clients should set this to true only for server supporting this feature, which is when proto in the INFO protocol is set to at least 1.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Builder)]
-#[serde()]
-#[builder(default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Connect {
     pub verbose: bool,
     pub pedantic: bool,
     pub tls_required: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub pass: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub lang: String,
     pub version: String,
     pub protocol: u32,
     pub echo: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub sig: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub jwt: Option<String>,
 }
 
-impl Connect {
-    pub fn builder() -> ConnectBuilder {
-        ConnectBuilder::default()
+impl Connect {}
+
+impl ToString for Connect {
+    fn to_string(&self) -> String {
+        let mut buff = String::default();
+        buff.push_str("{\"verbose\": ");
+        buff.push_str(&self.verbose.to_string());
+        buff.push_str(&format!(r#","pedantic": {}"#, self.pedantic));
+        buff.push_str(&format!(r#","tls_required": {}"#, self.tls_required));
+        if let Some(ref auth_token) = self.auth_token {
+            buff.push_str(&format!(r#","auth_token": "{}""#, auth_token));
+        }
+        if let Some(ref user) = self.user {
+            buff.push_str(&format!(r#","user": "{}""#, user));
+        }
+        if let Some(ref pass) = self.pass {
+            buff.push_str(&format!(r#","pass": "{}""#, pass));
+        }
+        if let Some(ref name) = self.name {
+            buff.push_str(&format!(r#","name": "{}""#, name));
+        }
+        buff.push_str(&format!(r#","lang": "{}""#, self.lang));
+        buff.push_str(&format!(r#","version": "{}""#, self.version));
+        buff.push_str(&format!(r#","protocol": {}"#, self.protocol));
+        buff.push_str(&format!(r#","echo": {}"#, self.echo));
+        if let Some(ref sig) = self.sig {
+            buff.push_str(&format!(r#","sig": "{}""#, sig));
+        }
+        if let Some(ref jwt) = self.jwt {
+            buff.push_str(&format!(r#","jwt": "{}""#, jwt));
+        }
+        buff.push_str("}");
+        buff
     }
 }
+
 impl Default for Connect {
     fn default() -> Self {
         Connect {
@@ -271,7 +327,6 @@ pub struct Message {
     pub payload: Vec<u8>,
 }
 
-use ::std::fmt;
 impl fmt::Debug for Message {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -293,8 +348,7 @@ impl Default for Message {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Builder)]
-#[builder(default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Publish {
     pub subject: String,
     pub reply_to: Option<String>,
@@ -304,10 +358,6 @@ pub struct Publish {
 impl Publish {
     pub fn generate_reply_to() -> String {
         NUID::new().next()
-    }
-
-    pub fn builder() -> PublishBuilder {
-        PublishBuilder::default()
     }
 }
 
@@ -321,8 +371,7 @@ impl Default for Publish {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Builder)]
-#[builder(default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Subscribe {
     pub subject: String,
     pub sid: String,
@@ -343,23 +392,15 @@ impl Subscribe {
     pub fn generate_sid() -> String {
         NUID::new().next()
     }
-    pub fn builder() -> SubscribeBuilder {
-        SubscribeBuilder::default()
-    }
 }
 
-#[derive(Clone, Debug, PartialEq, Builder)]
-#[builder(default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct UnSubscribe {
     pub sid: String,
     pub max_msgs: Option<u32>,
 }
 
-impl UnSubscribe {
-    pub fn builder() -> UnSubscribeBuilder {
-        UnSubscribeBuilder::default()
-    }
-}
+impl UnSubscribe {}
 
 impl Default for UnSubscribe {
     fn default() -> Self {
@@ -411,21 +452,23 @@ impl Op {
         match self {
             Op::INFO(info) => {
                 let prefix = &b"INFO\t"[..];
-                let serialized_info = serde_json::to_vec(&info).unwrap();
+                let serialized_info = info.to_string();
                 let mut dst = BytesMut::with_capacity(serialized_info.len() + prefix.len() + 2);
                 dst.put(&prefix[..]);
-                dst.put(&serialized_info[..]);
+                dst.put(serialized_info.as_bytes());
                 dst.put(&b"\r\n"[..]);
                 Ok(dst.freeze())
             }
             Op::CONNECT(connect) => {
+
                 let prefix = &b"CONNECT\t"[..];
-                let serialized_connect = serde_json::to_vec(&connect).unwrap();
+                let serialized_connect = connect.to_string();
                 let mut dst = BytesMut::with_capacity(serialized_connect.len() + prefix.len() + 2);
                 dst.put(&prefix[..]);
-                dst.put(&serialized_connect[..]);
+                dst.put(serialized_connect.as_bytes());
                 dst.put(&b"\r\n"[..]);
                 Ok(dst.freeze())
+
             }
             Op::OK => {
                 let cmd = &b"+OK\r\n"[..];
@@ -450,7 +493,7 @@ impl Op {
                 let re = Regex::new(r"[']").unwrap();
                 let cmd = format!("-ERR '{}'\r\n", re.replace_all(msg.as_str(), "\\'"));
                 let mut dst = BytesMut::with_capacity(cmd.len());
-                dst.put(&cmd);
+                dst.put(cmd.as_bytes());
                 Ok(dst.freeze())
             }
             Op::MSG(msg) => {
@@ -570,17 +613,18 @@ fn ser_connect() {
         sig: None,
         jwt: None,
     })
-    .into_bytes()
-    {
-        Ok(b) => {
-            //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
-            let c = format!("CONNECT\t{}\r\n", r#"{"verbose":false,"pedantic":false,"tls_required":false,"name":"","lang":"go","version":"1.2.2","protocol":1,"echo":true}"#);
-            assert_eq!(&b[..], c.as_bytes());
+        .into_bytes()
+        {
+            Ok(b) => {
+                println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
+                //                                           {"verbose": false,"pedantic": false,"tls_required": false,"name": "","lang": "go","version": "1.2.2","protocol": 1,"echo": "true"}
+                let c = format!("CONNECT\t{}\r\n", r#"{"verbose": false,"pedantic": false,"tls_required": false,"name": "","lang": "go","version": "1.2.2","protocol": 1,"echo": true}"#);
+                assert_eq!(&b[..], c.as_bytes());
+            }
+            Err(_) => {
+                assert!(false);
+            }
         }
-        Err(_) => {
-            assert!(false);
-        }
-    }
 }
 
 #[test]
@@ -591,17 +635,17 @@ fn ser_message() {
         reply_to: Some(String::from("INBOX.34")),
         payload: Vec::from(b"Hello World" as &[u8]),
     })
-    .into_bytes()
-    {
-        Ok(b) => {
-            //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
-            let c = format!("MSG\tFOO.BAR\t9\tINBOX.34\t11\r\n{}\r\n", r#"Hello World"#);
-            assert_eq!(&b[..], c.as_bytes());
+        .into_bytes()
+        {
+            Ok(b) => {
+                //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
+                let c = format!("MSG\tFOO.BAR\t9\tINBOX.34\t11\r\n{}\r\n", r#"Hello World"#);
+                assert_eq!(&b[..], c.as_bytes());
+            }
+            Err(_) => {
+                assert!(false);
+            }
         }
-        Err(_) => {
-            assert!(false);
-        }
-    }
 }
 
 #[test]
@@ -612,17 +656,17 @@ fn ser_message_no_reply() {
         reply_to: None,
         payload: Vec::from(b"Hello New World" as &[u8]),
     })
-    .into_bytes()
-    {
-        Ok(b) => {
-            //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
-            let c = format!("MSG\tFOO.BAR\t9\t15\r\n{}\r\n", r#"Hello New World"#);
-            assert_eq!(&b[..], c.as_bytes());
+        .into_bytes()
+        {
+            Ok(b) => {
+                //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
+                let c = format!("MSG\tFOO.BAR\t9\t15\r\n{}\r\n", r#"Hello New World"#);
+                assert_eq!(&b[..], c.as_bytes());
+            }
+            Err(_) => {
+                assert!(false);
+            }
         }
-        Err(_) => {
-            assert!(false);
-        }
-    }
 }
 
 #[test]
@@ -632,19 +676,19 @@ fn ser_publish() {
         reply_to: Some(String::from("INBOX.22")),
         payload: Vec::from(b"Knock Knock" as &[u8]),
     })
-    .into_bytes()
-    {
-        Ok(b) => {
-            //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
-            assert_eq!(
-                &b[..],
-                &b"PUB\tFRONT.DOOR\tINBOX.22\t11\r\nKnock Knock\r\n"[..]
-            );
+        .into_bytes()
+        {
+            Ok(b) => {
+                //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
+                assert_eq!(
+                    &b[..],
+                    &b"PUB\tFRONT.DOOR\tINBOX.22\t11\r\nKnock Knock\r\n"[..]
+                );
+            }
+            Err(_) => {
+                assert!(false);
+            }
         }
-        Err(_) => {
-            assert!(false);
-        }
-    }
 }
 
 #[test]
@@ -654,16 +698,16 @@ fn ser_publish_no_reply() {
         reply_to: None,
         payload: Vec::from(b"Knock Knock Again" as &[u8]),
     })
-    .into_bytes()
-    {
-        Ok(b) => {
-            //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
-            assert_eq!(&b[..], &b"PUB\tFRONT.DOOR\t17\r\nKnock Knock Again\r\n"[..]);
+        .into_bytes()
+        {
+            Ok(b) => {
+                //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
+                assert_eq!(&b[..], &b"PUB\tFRONT.DOOR\t17\r\nKnock Knock Again\r\n"[..]);
+            }
+            Err(_) => {
+                assert!(false);
+            }
         }
-        Err(_) => {
-            assert!(false);
-        }
-    }
 }
 
 #[test]
@@ -673,16 +717,16 @@ fn ser_sub() {
         sid: String::from("44"),
         queue_group: Some(String::from("G1")),
     })
-    .into_bytes()
-    {
-        Ok(b) => {
-            //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
-            assert_eq!(&b[..], &b"SUB\tBAR\tG1\t44\r\n"[..]);
+        .into_bytes()
+        {
+            Ok(b) => {
+                //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
+                assert_eq!(&b[..], &b"SUB\tBAR\tG1\t44\r\n"[..]);
+            }
+            Err(_) => {
+                assert!(false);
+            }
         }
-        Err(_) => {
-            assert!(false);
-        }
-    }
 }
 
 #[test]
@@ -692,16 +736,16 @@ fn ser_sub_no_group() {
         sid: String::from("44"),
         queue_group: None,
     })
-    .into_bytes()
-    {
-        Ok(b) => {
-            //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
-            assert_eq!(&b[..], &b"SUB\tBAR\t44\r\n"[..]);
+        .into_bytes()
+        {
+            Ok(b) => {
+                //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
+                assert_eq!(&b[..], &b"SUB\tBAR\t44\r\n"[..]);
+            }
+            Err(_) => {
+                assert!(false);
+            }
         }
-        Err(_) => {
-            assert!(false);
-        }
-    }
 }
 
 #[test]
@@ -710,16 +754,16 @@ fn ser_unsub() {
         sid: String::from("44234535"),
         max_msgs: Some(500),
     })
-    .into_bytes()
-    {
-        Ok(b) => {
-            //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
-            assert_eq!(&b[..], &b"UNSUB\t44234535\t500\r\n"[..]);
+        .into_bytes()
+        {
+            Ok(b) => {
+                //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
+                assert_eq!(&b[..], &b"UNSUB\t44234535\t500\r\n"[..]);
+            }
+            Err(_) => {
+                assert!(false);
+            }
         }
-        Err(_) => {
-            assert!(false);
-        }
-    }
 }
 
 #[test]
@@ -728,14 +772,14 @@ fn ser_unsub_no_max() {
         sid: String::from("44234535"),
         max_msgs: None,
     })
-    .into_bytes()
-    {
-        Ok(b) => {
-            //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
-            assert_eq!(&b[..], &b"UNSUB\t44234535\r\n"[..]);
+        .into_bytes()
+        {
+            Ok(b) => {
+                //println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
+                assert_eq!(&b[..], &b"UNSUB\t44234535\r\n"[..]);
+            }
+            Err(_) => {
+                assert!(false);
+            }
         }
-        Err(_) => {
-            assert!(false);
-        }
-    }
 }

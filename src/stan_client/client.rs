@@ -1,51 +1,45 @@
-use super::*;
+use crate::stan_client::{StanClient, StanOptions, DEFAULT_DISCOVER_PREFIX, ClientInfo, StanMessage, StartPosition, DEFAULT_MAX_INFLIGHT, DEFAULT_ACK_WAIT, StanSubscribe, StanSid, Subscription, AckHandler};
+use std::sync::{Arc, RwLock};
 use crate::error::RatsioError;
-use crate::nats_client::NatsClient;
 use crate::nuid::NUID;
-use crate::ops::{Publish, Subscribe};
-use crate::protocol::{
-    Ack, CloseRequest, ConnectRequest, ConnectResponse, PubMsg, SubscriptionRequest,
-    SubscriptionResponse,
-};
-use futures::{
-    future::{self, Either},
-    stream::Stream,
-    sync::mpsc,
-    Future,
-};
-use parking_lot::RwLock;
-use protobuf::{parse_from_bytes, Message as ProtoMessage};
+use crate::nats_client::{NatsClient, ClosableMessage};
+use crate::protocol;
+use prost::Message;
+use nom::lib::std::collections::HashMap;
+use futures::{Stream, StreamExt};
+use tokio::sync::mpsc::UnboundedReceiver;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::HashMap,
-    sync::{atomic::AtomicBool, Arc},
-};
+use std::ops::Deref;
+use pin_project::pin_project;
+use std::task::{Context, Poll};
+use std::pin::Pin;
 
-impl Into<ClientInfo> for ConnectResponse {
+
+impl Into<ClientInfo> for protocol::ConnectResponse {
     fn into(self) -> ClientInfo {
         ClientInfo {
-            pub_prefix: self.pubPrefix.clone(),
-            sub_requests: self.subRequests.clone(),
-            unsub_requests: self.unsubRequests.clone(),
-            sub_close_requests: self.subCloseRequests.clone(),
-            close_requests: self.closeRequests.clone(),
-            ping_requests: self.pingRequests.clone(),
+            pub_prefix: self.pub_prefix.clone(),
+            sub_requests: self.sub_requests.clone(),
+            unsub_requests: self.unsub_requests.clone(),
+            sub_close_requests: self.sub_close_requests.clone(),
+            close_requests: self.close_requests.clone(),
+            ping_requests: self.ping_requests.clone(),
+            public_key: self.public_key.clone(),
         }
     }
 }
 
 impl StanClient {
-    pub fn from_options(
-        options: StanOptions,
-    ) -> impl Future<Item = Arc<Self>, Error = RatsioError> {
+    pub async fn from_options(options: StanOptions) -> Result<Arc<Self>, RatsioError> {
         let id_generator = Arc::new(RwLock::new({
             let mut id_gen = NUID::new();
             id_gen.randomize_prefix();
             id_gen
         }));
-        let conn_id = id_generator.write().next();
-        debug!(target: "ratsio", "Connection id => {}", &conn_id);
-        let heartbeat_inbox: String = format!("_HB.{}", id_generator.write().next());
+
+        let conn_id = id_generator.write().unwrap().next();
+        debug!("Connection id => {}", &conn_id);
+        let heartbeat_inbox: String = format!("_HB.{}", id_generator.write().unwrap().next());
         let discover_subject: String =
             format!("{}.{}", DEFAULT_DISCOVER_PREFIX, options.cluster_id);
         let client_id = options.client_id.clone();
@@ -53,389 +47,500 @@ impl StanClient {
         let mut nats_options = options.nats_options.clone();
         nats_options.name = client_id.clone();
         nats_options.subscribe_on_reconnect = false;
-        NatsClient::connect(nats_options.clone()).and_then(move |nats_client: Arc<NatsClient>| {
-            debug!(target: "ratsio", "Got NATS client");
-            let mut connect_request = ConnectRequest::new();
-            connect_request.set_clientID(client_id.clone());
-            connect_request.set_connID(conn_id.clone().into_bytes());
-            connect_request.set_heartbeatInbox(heartbeat_inbox.clone());
 
-            debug!(target: "ratsio", "Connecting STAN Client");
-            let connect_payload = ProtoMessage::write_to_bytes(&connect_request).unwrap();
-            let (tx, rx) = mpsc::unbounded::<String>();
+        let nats_client = NatsClient::new(options.nats_options.clone()).await?;
+        debug!("Connecting STAN Client");
+        let connect_request = protocol::ConnectRequest {
+            client_id: client_id.clone(),
+            conn_id: conn_id.clone().as_bytes().into(),
+            heartbeat_inbox: heartbeat_inbox.clone(),
+            ..Default::default()
+        };
 
-            debug!(target: "ratsio", "Subscibing to STAN Client heartbeats");
-            StanClient::process_heartbeats(
-                id_generator.clone(),
-                &conn_id,
-                &client_id,
-                &heartbeat_inbox,
-                nats_client.clone(),
-            );
+        let mut connect_request_buf: Vec<u8> = Vec::with_capacity(64);
+        connect_request.encode(&mut connect_request_buf).unwrap();
+        let connect_response = nats_client.request(discover_subject, connect_request_buf.as_slice()).await?;
+        let connect_response = protocol::ConnectResponse::decode(connect_response.payload.as_slice())?;
+        let client_info: ClientInfo = connect_response.clone().into();
 
-            let recon_discover_subject = discover_subject.clone();
-            debug!(target: "ratsio", "Issuing STAN join request");
-            //TODO add a timeout for cases where the STAN server does not reply.
-            nats_client
-                .request(discover_subject, &connect_payload)
-                .map(move |response| {
-                    let connect_response =
-                        parse_from_bytes::<ConnectResponse>(&response.payload[..]).unwrap();
-                    let client_info: ClientInfo = connect_response.clone().into();
-                    let stan_client = Arc::new(StanClient {
-                        //subs_tx: Arc::new(RwLock::new(HashMap::default())),
-                        options: StanOptions {
-                            nats_options,
-                            ..options
-                        },
-
-                        nats_client,
-                        client_id: client_id.clone(),
-                        conn_id: Arc::new(RwLock::new(conn_id.into_bytes())),
-                        client_info: Arc::new(RwLock::new(client_info)),
-
-                        ping_max_out: connect_response.pingMaxOut,
-                        ping_interval: connect_response.pingInterval,
-                        protocol: connect_response.protocol,
-                        public_key: connect_response.publicKey,
-
-                        id_generator,
-
-                        subscriptions: Arc::new(RwLock::new(HashMap::default())),
-                        pub_ack_map: Arc::new(RwLock::new(HashMap::default())),
-                        unsub_tx: tx,
-                    });
-
-                    // Unsubscribe channel receiver.
-                    let unsub_cb_stan_client = stan_client.clone();
-                    tokio::spawn(rx.for_each(move |sub_id| {
-                        debug!(target: "ratsio", "unsubscribing => {} ", sub_id);
-                        unsub_cb_stan_client
-                            .subscriptions
-                            .write()
-                            .remove(&sub_id[..]);
-                        Ok(())
-                    }));
-
-                    StanClient::register_reconnect_handler(
-                        stan_client.clone(),
-                        recon_discover_subject.clone(),
-                    );
-
-                    stan_client
-                })
-        })
-    }
-
-    fn register_reconnect_handler(stan_client: Arc<StanClient>, discover_subject: String) {
-        let nats_client = stan_client.nats_client.clone();
-        let client_id = stan_client.client_id.clone();
-
-        nats_client.add_reconnect_handler(String::from("_STAN"), Box::new(move |nats_client| {
-            //We may need to disconnect first ......
-            let heartbeat_inbox: String = format!("_HB.{}", stan_client.id_generator.write().next());
-            let mut close_request = CloseRequest::new();
-            let close_requests_subject = stan_client.client_info.read().close_requests.clone();
-            close_request.set_clientID(stan_client.client_id.clone());
-            let buf = ProtoMessage::write_to_bytes(&close_request).unwrap();
-            info!(target: "ratsio", " STAN Reconnecting closing old connection");
-            let close_fut = nats_client.request(close_requests_subject.clone(), buf[..].into());
-
-            let conn_id = stan_client.id_generator.write().next();
-            *stan_client.conn_id.write() = conn_id.clone().into_bytes();
-
-            let nats_client = stan_client.nats_client.clone();
-            StanClient::process_heartbeats(
-                stan_client.id_generator.clone(),
-                &conn_id, &client_id,
-                &heartbeat_inbox, nats_client.clone());
-
-            let mut connect_request = ConnectRequest::new();
-            connect_request.set_clientID(client_id.clone());
-            connect_request.set_connID(conn_id.clone().into_bytes());
-            connect_request.set_heartbeatInbox(heartbeat_inbox.clone());
-
-
-            let print_subs = stan_client.subscriptions.read().clone();
-            info!(target: "ratsio", " 1 STAN Reconnecting Subscriptions [{}]\n\n{:?}", print_subs.len(),
-                  print_subs.iter().map(|(key, sub)| format!("{} =>  {}", key, sub.inbox)).collect::<Vec<_>>());
-
-
-            let buf = ProtoMessage::write_to_bytes(&connect_request).unwrap();
-            let recon_subs_stan_client = stan_client.clone();
-            let recon_fut = stan_client.nats_client
-                .request(discover_subject.clone(), &buf)
-                .map_err(|_| ())
-                .and_then(move |response| {
-                    info!(target: "ratsio", " STAN Reconnecting Response => {:?}", &response);
-                    let connect_response = parse_from_bytes::<ConnectResponse>(
-                        &response.payload[..]).unwrap();
-
-                    let client_info: ClientInfo = connect_response.into();
-                    info!(target: "ratsio", " STAN Reconnecting ClientInfo => {:?}", &client_info);
-                    *recon_subs_stan_client.client_info.write() = client_info;
-
-                    let print_subs = recon_subs_stan_client.subscriptions.read().clone();
-                    info!(target: "ratsio", " STAN Reconnecting Subscriptions [{}]\n\n{:?}", print_subs.len(),
-                          print_subs.iter().map(|(key, sub)| format!("{} =>  {}", key, sub.inbox)).collect::<Vec<_>>());
-
-                    let subs_fut_list = {
-                        let subscriptions = recon_subs_stan_client.subscriptions.read();
-                        subscriptions.iter().map(|(id, sub)| {
-                            let subject = sub.cmd.subject.clone();
-                            let err_subject = sub.cmd.subject.clone();
-                            recon_subs_stan_client
-                                .subscribe_inner(sub.cmd.clone(), id.clone(), sub.handler.clone())
-                                .map(move |_| {
-                                    debug!(target: "ratsio", "Subject re-subscribed to => {}", subject)
-                                })
-                                .or_else(move |err| {
-                                    error!(target: "ratsio", "Error re-subscribing to => {} after reconnect {:?}", err_subject, err);
-                                    Ok(())
-                                })
-                        }).collect::<Vec<_>>()
-                    };
-                    future::join_all(subs_fut_list).map(|_| ())
-                });
-            tokio::spawn(close_fut.then(|_| {
-                info!(target: "ratsio", " STAN Reconnecting ...");
-                recon_fut.map_err(|err| {
-                    error!(target: "ratsio", "Error reconnecting to STAN: {:?}", err)
-                }).map(|_| {
-                    info!(target: "ratsio", " STAN Reconnecting Done, Ready!");
-                })
-            }));
-        }));
-    }
-
-    fn process_heartbeats(
-        id_generator: Arc<RwLock<NUID>>,
-        conn_id: &str,
-        client_id: &str,
-        heartbeat_inbox: &str,
-        nats_client: Arc<NatsClient>,
-    ) {
-        let hb_conn_id = conn_id.to_string();
-        let hb_client_id = client_id.to_string();
-        debug!(target: "ratsio", "Subscribing to heartbeat => {}", &heartbeat_inbox);
-        let sub = Subscribe::builder()
-            .subject(heartbeat_inbox.to_string())
-            .build()
-            .unwrap();
-        tokio::spawn(nats_client.clone().subscribe(sub)
-            .and_then(|stream| {
-                stream
-                    .for_each(move |msg| {
-                        debug!(target: "ratsio", "HEARTBEAT {}", msg.subject);
-                        if let Some(reply_to) = msg.reply_to {
-                            let mut reply_msg = PubMsg::new();
-                            reply_msg.set_clientID(hb_client_id.clone());
-                            reply_msg.set_connID(hb_conn_id.clone().into_bytes());
-                            reply_msg.set_subject(reply_to.clone());
-                            reply_msg.set_data(Vec::new());
-                            reply_msg.set_guid(id_generator.write().next());
-                            let buf = ProtoMessage::write_to_bytes(&reply_msg).unwrap();
-                            trace!(target: "ratsio", "HEARTBEAT -- reply_to {}", &reply_to, );
-                            let reply_publish = Publish::builder()
-                                .subject(reply_to.clone())
-                                .payload(buf)
-                                .build().unwrap();
-                            Either::A(nats_client.publish(reply_publish)
-                                .map(|_| {
-                                    trace!(target: "ratsio", "HEARTBEAT -- heartbeat reply was sent");
-                                })
-                                .or_else(|err| {
-                                    error!(target: "ratsio", "Error replying to heartbeat {:?}", err);
-                                    Ok(())
-                                }))
-                        } else {
-                            Either::B(future::ok(()))
-                        }
-                    })
-            }).map_err(|err| {
-            error!(target: "ratsio", "Error in heartbeat stream {:?}", err);
-        }));
-    }
-
-    fn sub_request_payload(&self, subscribe: &StanSubscribe, inbox: &str) -> Vec<u8> {
-        let mut sub_request = SubscriptionRequest::new();
-        sub_request.set_clientID(self.client_id.clone());
-        sub_request.set_subject(subscribe.subject.clone());
-        if let Some(queue_group) = subscribe.queue_group.clone() {
-            sub_request.set_qGroup(queue_group);
-        }
-        if let Some(durable_name) = subscribe.durable_name.clone() {
-            sub_request.set_durableName(durable_name);
-        }
-        sub_request.set_ackWaitInSecs(subscribe.ack_wait_in_secs);
-        sub_request.set_startSequence(subscribe.start_sequence);
-        sub_request.set_maxInFlight(subscribe.max_in_flight);
-        sub_request.set_startPosition(match subscribe.start_position {
-            StartPosition::NewOnly => crate::protocol::StartPosition::NewOnly,
-            StartPosition::LastReceived => crate::protocol::StartPosition::LastReceived,
-            StartPosition::TimeDeltaStart => crate::protocol::StartPosition::TimeDeltaStart,
-            StartPosition::SequenceStart => crate::protocol::StartPosition::SequenceStart,
-            StartPosition::First => crate::protocol::StartPosition::First,
+        let stan_client = Arc::new(StanClient {
+            //subs_tx: Arc::new(RwLock::new(HashMap::default())),
+            options: StanOptions {
+                nats_options,
+                ..options
+            },
+            nats_client: nats_client.clone(),
+            client_id: client_id.clone().clone(),
+            conn_id: RwLock::new(conn_id.clone().into_bytes()),
+            client_info: Arc::new(RwLock::new(client_info)),
+            id_generator: id_generator.clone(),
+            subscriptions: RwLock::new(HashMap::default()),
+            self_reference:RwLock::new(None),
         });
-        sub_request.set_inbox(inbox.to_string());
-        ProtoMessage::write_to_bytes(&sub_request).unwrap()
+        *stan_client.self_reference.write().unwrap() = Some(stan_client.clone());
+
+        tokio::spawn(async move {
+            let _ = StanClient::process_heartbeats(
+                nats_client.clone(), id_generator.clone(), conn_id.clone().into_bytes(),
+                client_id.clone(), heartbeat_inbox.clone()).await;
+        });
+
+
+        let reconnect_stan_client = stan_client.clone();
+        stan_client.nats_client.add_reconnect_handler(Box::new(move |_nats_client| {
+            let stan_client = reconnect_stan_client.clone();
+            tokio::spawn(async move {
+                let _ = stan_client.clone().on_reconnect().await;
+            });
+        }))?;
+
+        Ok(stan_client)
     }
 
-    pub fn get_subscription(&self, id: &str) -> Option<Arc<Subscription>> {
-        self.subscriptions.read().get(id).cloned()
-    }
+    async fn process_heartbeats(nats_client: Arc<NatsClient>, id_generator: Arc<RwLock<NUID>>,
+                                conn_id: Vec<u8>, client_id: String, heartbeat_inbox: String) -> Result<(), RatsioError> {
+        debug!("Subscribing to heartbeat => {}", &heartbeat_inbox);
+        let (_sid, mut heartbeats) = nats_client.subscribe(heartbeat_inbox.clone()).await?;
+        while let Some(msg) = heartbeats.next().await {
+            if let Some(reply_to) = msg.reply_to {
+                let reply_msg = protocol::PubMsg {
+                    client_id: client_id.clone(),
+                    conn_id: conn_id.clone(),
+                    subject: heartbeat_inbox.clone(),
+                    guid: id_generator.write().map(|mut id_gen| id_gen.next()).unwrap_or_default(),
+                    ..Default::default()
+                };
 
-    pub fn subscribe<T>(
-        &self,
-        subscribe: StanSubscribe,
-        handler: T,
-    ) -> impl Future<Item = String, Error = RatsioError>
-    where
-        T: Into<SubscriptionHandler>,
-    {
-        let subscription_id = self.id_generator.write().next();
-        self.subscribe_inner(subscribe, subscription_id, Arc::new(handler.into()))
-    }
-
-    fn subscribe_inner(
-        &self,
-        subscribe: StanSubscribe,
-        subscription_id: String,
-        handler: Arc<SubscriptionHandler>,
-    ) -> impl Future<Item = String, Error = RatsioError> {
-        let inbox: String = format!("_SUB.{}", self.id_generator.write().next());
-
-        let subs_nats_client = self.nats_client.clone();
-        let subs_client_id = self.client_id.clone();
-
-        let unsub_requests = self.client_info.read().unsub_requests.clone();
-        let close_requests = self.client_info.read().close_requests.clone();
-        let subscriptions = self.subscriptions.clone();
-        let unsub_tx = self.unsub_tx.clone();
-
-        let payload = self.sub_request_payload(&subscribe, &inbox);
-        self.nats_client
-            .clone()
-            .request(self.client_info.read().sub_requests.clone(), &payload)
-            .and_then(move |sub_response| {
-                let sub_response =
-                    parse_from_bytes::<SubscriptionResponse>(&sub_response.payload[..]).unwrap();
-
-                let sub = Subscribe::builder().subject(inbox.clone()).build().unwrap();
-                subs_nats_client.subscribe(sub).and_then(move |stream| {
-                    let subscription = Subscription {
-                        subscription_id: subscription_id.clone(),
-                        client_id: subs_client_id,
-                        inbox: inbox.clone(),
-                        cmd: subscribe,
-                        ack_inbox: sub_response.ackInbox.clone(),
-                        nats_client: subs_nats_client,
-                        unsub_requests,
-                        close_requests,
-                        is_closed: AtomicBool::new(false),
-                        unsub_tx,
-                        handler,
+                let mut req_buf: Vec<u8> = Vec::with_capacity(64);
+                reply_msg.encode(&mut req_buf).unwrap();
+                match nats_client.publish(reply_to, req_buf.as_slice()).await {
+                    Ok(_) => {
+                        //info!("HEARTBEAT -- heartbeat reply was sent");
                     }
-                    .start(Box::new(stream));
-                    subscriptions
-                        .write()
-                        .insert(subscription_id.clone(), subscription.clone());
-                    future::ok(subscription_id)
-                })
-            })
+                    Err(err) => {
+                        error!("Error replying to heartbeat {:?}", err);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
-    fn ack_message(
+    async fn on_reconnect(&self) -> Result<(), RatsioError> {
+        let close_requests = self.client_info.read()
+            .map(|ci| ci.deref().close_requests.clone()).unwrap_or_default();
+        //We may need to disconnect first .
+        let nats_client = self.nats_client.clone();
+        let close_request = protocol::CloseRequest {
+            client_id: self.client_id.clone(),
+        };
+        let mut close_req_buf: Vec<u8> = Vec::with_capacity(64);
+        close_request.encode(&mut close_req_buf).unwrap();
+        let _ = nats_client.publish(close_requests.clone(), &close_req_buf[..]).await?;
+
+        let conn_id = self.id_generator.write()
+            .map(|mut i| i.next()).unwrap_or_default();
+        if let Ok(mut old_conn_id) = self.conn_id.write() {
+            *old_conn_id = conn_id.clone().into_bytes().clone();
+        }
+        debug!("Connection id => {}", &conn_id);
+        let heartbeat_inbox: String = format!("_HB.{}", self.id_generator.write().unwrap().next());
+        let discover_subject: String =
+            format!("{}.{}", DEFAULT_DISCOVER_PREFIX, self.options.cluster_id);
+        let client_id = self.options.client_id.clone();
+
+        debug!("Re-Connecting STAN Client");
+        let connect_request = protocol::ConnectRequest {
+            client_id: client_id.clone(),
+            conn_id: conn_id.clone().as_bytes().into(),
+            heartbeat_inbox: heartbeat_inbox.clone(),
+            ..Default::default()
+        };
+
+        let mut connect_request_buf: Vec<u8> = Vec::with_capacity(64);
+        connect_request.encode(&mut connect_request_buf).unwrap();
+        let connect_response = self.nats_client.request(discover_subject, connect_request_buf.as_slice()).await?;
+        let connect_response = protocol::ConnectResponse::decode(connect_response.payload.as_slice())?;
+        let client_info: ClientInfo = connect_response.into();
+
+        if let Ok(mut client_info_guard) = self.client_info.write() {
+            *client_info_guard = client_info.clone()
+        }
+        if let Ok(mut conn_id_guard) = self.conn_id.write() {
+            *conn_id_guard = conn_id.clone().into_bytes();
+        }
+
+        let hb_id_generator = self.id_generator.clone();
+        let hb_nats_client = self.nats_client.clone();
+        tokio::spawn(async move {
+            let _ = StanClient::process_heartbeats(
+                hb_nats_client, hb_id_generator, conn_id.clone().into_bytes(),
+                client_id.clone(), heartbeat_inbox.clone()).await;
+        });
+
+        let subscriptions = self.subscriptions.write().map(|m| {
+            let mut subs: Vec<Subscription> = Vec::new();
+            for n in m.iter() {
+                subs.push(n.1.clone())
+            }
+            subs
+        }).unwrap_or_default();
+
+        for sub in subscriptions {
+            let _ = self.re_subscribe(&client_info, sub).await;
+        }
+        Ok(())
+    }
+
+    async fn re_subscribe(&self, client_info: &ClientInfo, sub: Subscription) -> Result<(), RatsioError> {
+        let inbox: String = format!("_SUB.{}", self.id_generator.write()
+            .map(|mut id_gen| id_gen.next()).unwrap_or_default());
+
+        let sub_request = protocol::SubscriptionRequest {
+            client_id: self.client_id.clone(),
+            subject: sub.subject.to_string(),
+            q_group: sub.queue_group.clone().map(|x| x.to_string()).unwrap_or_default(),
+            durable_name: sub.durable_name.clone().map(|x| x.to_string()).unwrap_or_default(),
+            ack_wait_in_secs: sub.ack_wait_in_secs,
+            max_in_flight: sub.max_in_flight,
+            start_sequence: 0,
+            start_time_delta: 0,
+            start_position: protocol::StartPosition::LastReceived as i32,
+            inbox: inbox.clone(),
+        };
+
+        let mut su_req_buf: Vec<u8> = Vec::with_capacity(64);
+        sub_request.encode(&mut su_req_buf).unwrap();
+
+        let sender = sub.sender.clone();
+        if let Ok(sub_response) = self.nats_client.request(&client_info.sub_requests, su_req_buf.as_slice()).await {
+            let sub_response = protocol::SubscriptionResponse::decode(&sub_response.payload[..]).unwrap();
+            let ack_inbox = sub_response.ack_inbox.clone();
+            let (sid, mut subscription) = self.nats_client.subscribe(inbox.clone()).await?;
+            if let Ok(mut subscriptions) = self.subscriptions.write() {
+                let stan_sid = StanSid(sid);
+                let new_sub = Subscription {
+                    client_id: self.client_id.clone(),
+                    subject: sub.subject.clone(),
+                    durable_name: sub.durable_name.clone(),
+                    queue_group: sub.queue_group.clone(),
+                    max_in_flight: sub.max_in_flight,
+                    ack_wait_in_secs: sub.ack_wait_in_secs,
+                    inbox: sub.inbox.clone(),
+                    ack_inbox: ack_inbox.clone(),
+                    unsub_requests: client_info.unsub_requests.clone(),
+                    close_requests: client_info.close_requests.clone(),
+                    sender: sender.clone(),
+                };
+                subscriptions.insert((stan_sid.0).0.clone(), new_sub);
+
+                tokio::spawn(async move {
+                    while let Some(nats_msg) = subscription.next().await {
+                        let _ = sender.send(ClosableMessage::Message(nats_msg));
+                    }
+                });
+            }
+        }
+        Ok(())
+    }
+
+    // Subscribe will perform a subscription with the given options to the cluster.
+	//
+	// If no option is specified, DefaultSubscriptionOptions are used. The default start
+	// position is to receive new messages only (messages published after the subscription is
+	// registered in the cluster).
+    pub async fn subscribe<T>(
+        &self, subject: T, queue_group: Option<T>, durable_name: Option<T>,
+    ) -> Result<(StanSid, impl Stream<Item=StanMessage> + Send + Sync), RatsioError>
+        where T: ToString {
+        self.subscribe_inner(subject.to_string(), queue_group.map(|i| i.to_string()),
+                             durable_name.map(|i| i.to_string()),
+                             DEFAULT_MAX_INFLIGHT, DEFAULT_ACK_WAIT,
+                             StartPosition::First, 0, None, false).await
+    }
+
+    pub async fn subscribe_with_manual_ack<T>(
+        &self, subject: T, queue_group: Option<T>, durable_name: Option<T>,
+    ) -> Result<(StanSid, impl Stream<Item=StanMessage> + Send + Sync), RatsioError>
+        where T: ToString {
+        self.subscribe_inner(subject.to_string(), queue_group.map(|i| i.to_string()),
+                             durable_name.map(|i| i.to_string()),
+                             DEFAULT_MAX_INFLIGHT, DEFAULT_ACK_WAIT,
+                             StartPosition::LastReceived, 0, None, true).await
+    }
+
+    pub async fn subscribe_with_all<T>(
+        &self,
+        subject: T, queue_group: Option<T>, durable_name: Option<T>,
+        max_in_flight: i32, ack_wait_in_secs: i32, start_position: StartPosition,
+        start_sequence: u64, start_time_delta: Option<i32>, manual_acks: bool,
+    ) -> Result<(StanSid, impl Stream<Item=StanMessage> + Send + Sync), RatsioError>
+        where T: ToString {
+        self.subscribe_inner(subject.to_string(), queue_group.map(|i| i.to_string()),
+                             durable_name.map(|i| i.to_string()),
+                             max_in_flight, ack_wait_in_secs,
+                             start_position, start_sequence, start_time_delta, manual_acks).await
+    }
+
+    pub async fn subscribe_with<T>(
+        &self, stan_subscribe: T,
+    ) -> Result<(StanSid, impl Stream<Item=StanMessage> + Send + Sync), RatsioError>
+        where T: Into<StanSubscribe> {
+        let stan_subscribe = stan_subscribe.into();
+        self.subscribe_inner(stan_subscribe.subject.clone(), stan_subscribe.queue_group.clone(),
+                             stan_subscribe.durable_name.clone(),
+                             stan_subscribe.max_in_flight.clone(), stan_subscribe.ack_wait_in_secs.clone(),
+                             stan_subscribe.start_position.clone(), stan_subscribe.start_sequence.clone(),
+                             stan_subscribe.start_time_delta.clone(), stan_subscribe.manual_acks.clone()).await
+    }
+
+    async fn subscribe_inner(&self,
+                             subject: String, queue_group: Option<String>, durable_name: Option<String>,
+                             max_in_flight: i32, ack_wait_in_secs: i32, start_position: StartPosition,
+                             start_sequence: u64, start_time_delta: Option<i32>, manual_acks: bool,
+    ) -> Result<(StanSid, impl Stream<Item=StanMessage> + Send + Sync), RatsioError> {
+        let client_info = self.client_info.read().map(|e| e.clone())
+            .unwrap_or_else(|_| Default::default());
+        let inbox: String = format!("_SUB.{}", self.id_generator.write()
+            .map(|mut id_gen| id_gen.next()).unwrap_or_default());
+
+        let sub_request = protocol::SubscriptionRequest {
+            client_id: self.client_id.clone(), subject: subject.to_string(),
+            q_group: queue_group.clone().map(|x| x.to_string()).unwrap_or_default(),
+            durable_name: durable_name.clone().map(|x| x.to_string()).unwrap_or_default(),
+            ack_wait_in_secs, max_in_flight, start_sequence,
+            start_time_delta: (start_time_delta.unwrap_or_default() as i64),
+            start_position: match start_position {
+                StartPosition::NewOnly => protocol::StartPosition::NewOnly as i32,
+                StartPosition::LastReceived => protocol::StartPosition::LastReceived as i32,
+                StartPosition::TimeDeltaStart => protocol::StartPosition::TimeDeltaStart as i32,
+                StartPosition::SequenceStart => protocol::StartPosition::SequenceStart as i32,
+                StartPosition::First => protocol::StartPosition::First as i32,
+            },
+            inbox: inbox.clone(),
+        };
+
+        let mut su_req_buf: Vec<u8> = Vec::with_capacity(64);
+        sub_request.encode(&mut su_req_buf).unwrap();
+
+        if let Ok(sub_response) = self.nats_client.request(&client_info.sub_requests, su_req_buf.as_slice()).await {
+            let sub_response = protocol::SubscriptionResponse::decode(&sub_response.payload[..]).unwrap();
+            let ack_inbox = sub_response.ack_inbox.clone();
+            let (sid, mut subscription) = self.nats_client.subscribe(inbox.clone()).await?;
+            if let Ok(mut subscriptions) = self.subscriptions.write() {
+                let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+                let stan_sid = StanSid(sid);
+                let sub = Subscription {
+                    client_id: self.client_id.clone(),
+                    subject: subject.clone(),
+                    durable_name: durable_name.clone(),
+                    queue_group: queue_group.clone(),
+                    max_in_flight: max_in_flight,
+                    ack_wait_in_secs: ack_wait_in_secs,
+                    inbox: inbox.clone(),
+                    ack_inbox: ack_inbox.clone(),
+                    unsub_requests: client_info.unsub_requests.clone(),
+                    close_requests: client_info.close_requests.clone(),
+                    sender: sender.clone(),
+                };
+                subscriptions.insert((stan_sid.0).0.clone(), sub);
+
+                tokio::spawn(async move {
+                    while let Some(nats_msg) = subscription.next().await {
+                        let _ = sender.send(ClosableMessage::Message(nats_msg));
+                    }
+                });
+                Ok((stan_sid, StanClosableReceiver{
+                    receiver, ack_inbox, manual_acks, stan_client:self.get_self_reference()
+                }))
+            } else {
+                Err(RatsioError::InternalServerError)
+            }
+        } else {
+            Err(RatsioError::InternalServerError)
+        }
+    }
+
+    fn get_self_reference(&self) -> Arc<StanClient>{
+        self.self_reference.read().unwrap().clone().unwrap()
+    }
+
+    async fn ack_message(
         &self,
         ack_inbox: String,
         subject: String,
         sequence: u64,
-    ) -> impl Future<Item = (), Error = RatsioError> {
-        let mut ack_request = Ack::new();
-        ack_request.set_subject(subject);
-        ack_request.set_sequence(sequence);
-        let buf = ProtoMessage::write_to_bytes(&ack_request).unwrap();
-        self.nats_client.publish(
-            Publish::builder()
-                .payload(Vec::from(&buf[..]))
-                .subject(ack_inbox)
-                .build()
-                .unwrap(),
-        )
+    ) -> Result<(), RatsioError> {
+        let ack_request = protocol::Ack {
+            subject: subject,
+            sequence: sequence,
+        };
+        let mut ack_req_buf: Vec<u8> = Vec::with_capacity(64);
+        ack_request.encode(&mut ack_req_buf).unwrap();
+        self.nats_client.publish(ack_inbox, &ack_req_buf[..]).await
     }
 
 
-    pub fn acknowledge(&self, message: StanMessage) -> impl Future<Item = (), Error = RatsioError> {
+    pub async fn acknowledge(&self, message: StanMessage) -> Result<(), RatsioError> {
         match message.ack_inbox.clone() {
             Some(ack_inbox) => {
-                Either::A(self.ack_message(ack_inbox, message.subject.clone(), message.sequence))
-            },
+                self.ack_message(ack_inbox, message.subject.clone(), message.sequence).await
+            }
             None => {
-                Either::B(future::err(RatsioError::AckInboxMissing))
+                Err(RatsioError::AckInboxMissing)
             }
         }
-
     }
 
-    /// Sends an OP to the server
-    pub fn send(&self, message: StanMessage) -> impl Future<Item = (), Error = RatsioError> {
-        let mut pub_msg = PubMsg::new();
+    pub async fn publish<T>(&self, subject: T, payload: &[u8]) -> Result<(), RatsioError>
+        where T: ToString {
+        self.publish_inner(subject.to_string(), None, payload).await
+    }
+
+    pub async fn publish_with_reply<T>(&self, subject: T, reply_to: T, payload: &[u8]) -> Result<(), RatsioError>
+        where T: ToString {
+        self.publish_inner(subject.to_string(), Some(reply_to.to_string()), payload).await
+    }
+
+    pub async fn publish_with<T>(&self, message: T) -> Result<(), RatsioError>
+        where T: Into<StanMessage> {
+        let message = message.into();
+        self.publish_inner(message.subject.clone(), message.reply_to.clone(), &message.payload[..]).await
+    }
+
+    async fn publish_inner(&self, subject: String, reply_to: Option<String>, payload: &[u8]) -> Result<(), RatsioError> {
         let mut hasher = Sha256::new();
-        hasher.input(&message.payload[..]);
-        pub_msg.set_sha256(Vec::from(&hasher.result()[..]));
+        hasher.input(payload);
 
-        pub_msg.set_clientID(self.client_id.clone());
-        pub_msg.set_subject(message.subject.clone());
-        pub_msg.set_data(message.payload);
-        if let Some(reply_to) = message.reply_to {
-            pub_msg.set_reply(reply_to);
+        let conn_id = self.conn_id.read()
+            .map(|i| i.clone()).unwrap_or_default();
+        let guid = self.id_generator.write()
+            .map(|mut i| i.next()).unwrap_or_default();
+        let pub_msg = protocol::PubMsg {
+            sha256: Vec::from(&hasher.result()[..]),
+            client_id: self.client_id.clone(),
+            subject: subject.clone(),
+            reply: reply_to.unwrap_or_default(),
+            data: payload.into(),
+            guid: guid.clone(),
+            conn_id,
+        };
+
+        let mut pub_req_buf: Vec<u8> = Vec::with_capacity(64);
+        pub_msg.encode(&mut pub_req_buf).unwrap();
+        if let Ok(client_info) = self.client_info.read() {
+            self.nats_client.publish(format!(
+                "{}.{}", client_info.pub_prefix, subject
+            ), pub_req_buf.as_slice()).await
+        } else {
+            Err(RatsioError::InternalServerError)
         }
-        let conn_id = self.conn_id.read().clone();
-        trace!(target: "ratsio", "Sending conn id {}", ::std::str::from_utf8(&conn_id[..]).unwrap());
-        pub_msg.set_connID(conn_id);
-        let guid = self.id_generator.write().next();
-        pub_msg.set_guid(guid.clone());
-        self.pub_ack_map.write().insert(guid, 0);
-
-        let payload = ProtoMessage::write_to_bytes(&pub_msg).unwrap();
-        let publ = Publish::builder()
-            .subject(format!(
-                "{}.{}",
-                self.client_info.read().pub_prefix,
-                message.subject
-            ))
-            .payload(payload)
-            .build()
-            .unwrap();
-        trace!(target: "ratsio", "publishing to topic : {}", publ.subject);
-        self.nats_client.publish(publ)
     }
 
-    pub fn close(&self) -> impl Future<Item = (), Error = ()> {
-        let nats_client = self.nats_client.clone();
-        let close_requests = self.client_info.read().close_requests.clone();
-        let client_id = self.client_id.clone();
+    pub async fn un_subscribe(&self, stan_sid: &StanSid) -> Result<(), RatsioError> {
+        let client_info = if let Ok(client_info) = self.client_info.read() {
+            client_info
+        } else {
+            return Err(RatsioError::InternalServerError);
+        };
+        let mut subscriptions = if let Ok(subscriptions) = self.subscriptions.write() {
+            subscriptions
+        } else {
+            return Err(RatsioError::InternalServerError);
+        };
+        if let Some(subscription) = subscriptions.remove(&(stan_sid.0).0) {
+            let unsub_msg = protocol::UnsubscribeRequest {
+                client_id: self.client_id.clone(),
+                subject: subscription.subject.clone(),
+                inbox: subscription.inbox.clone(),
+                durable_name: subscription.durable_name.clone().unwrap_or_default(),
+            };
 
-        let subscriptions = self.subscriptions.clone();
+            let mut unsub_req_buf: Vec<u8> = Vec::with_capacity(64);
+            unsub_msg.encode(&mut unsub_req_buf).unwrap();
 
-        let subs_futures = subscriptions
-            .read()
-            .iter()
-            .map(|(_, s)| {
-                let s = s.clone();
-                s.close()
-            })
-            .collect::<Vec<_>>();
-        future::join_all(subs_futures)
-            .map_err(|_| RatsioError::GenericError("Closing connection".into()))
-            .and_then(move |_| {
-                let mut close_request = CloseRequest::new();
-                close_request.set_clientID(client_id);
-                let buf = ProtoMessage::write_to_bytes(&close_request).unwrap();
-                debug!(target: "ratsio", " STAN Shutting down ...");
-                nats_client.request(close_requests.clone(), buf[..].into())
-            })
-            .map(|_| debug!(target: "ratsio", "STAN Shutting down - DONE "))
-            .from_err()
+            let _ = self.nats_client.publish(client_info.unsub_requests.clone(), unsub_req_buf.as_slice()).await;
+            let _ = subscription.sender.send(ClosableMessage::Close);
+            self.nats_client.un_subscribe(&stan_sid.0).await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn close(&self) -> Result<(), RatsioError> {
+        if let Ok(ref client_info) = self.client_info.read() {
+            let nats_client = self.nats_client.clone();
+            let client_id = self.client_id.clone();
+            let close_request = protocol::CloseRequest {
+                client_id,
+            };
+            let mut close_req_buf: Vec<u8> = Vec::with_capacity(64);
+            close_request.encode(&mut close_req_buf).unwrap();
+            let _ = nats_client.publish(client_info.close_requests.clone(), &close_req_buf[..]).await?;
+        }
+        *self.self_reference.write().unwrap() = None;
+        self.nats_client.close().await
+    }
+}
+
+#[pin_project]
+struct StanClosableReceiver {
+    #[pin]
+    receiver: UnboundedReceiver<ClosableMessage>,
+    ack_inbox: String,
+    manual_acks: bool,
+    stan_client: Arc<StanClient>,
+}
+
+impl Stream for StanClosableReceiver {
+    type Item = StanMessage;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.project();
+        let ack_inbox = this.ack_inbox.clone();
+        let manual_acks = this.manual_acks;
+        let stan_client = this.stan_client.clone();
+        match this.receiver.poll_recv(cx) {
+            Poll::Ready(Some(ClosableMessage::Message(nats_msg))) => {
+                let msg = protocol::MsgProto::decode(&nats_msg.payload[..]).unwrap();
+                let subject = msg.subject.clone();
+                let sequence = msg.sequence;
+                let ack_ack_inbox = this.ack_inbox.clone();
+                let ack_subject = subject.clone();
+                let ack_handler = if !*manual_acks {
+                    Some(AckHandler(Box::new(move || {
+                        let ack_inbox2 = ack_ack_inbox.clone();
+                        let subject2 = ack_subject.clone();
+                        let stan_client2 = stan_client.clone();
+                        tokio::spawn(async move {
+                            //debug!("stan ack - message <=> {} ", &subject2);
+                            let _ = stan_client2.ack_message(ack_inbox2, subject2, sequence).await;
+                        });
+                    })))
+                }else {
+                    None
+                };
+                let stan_msg = StanMessage {
+                    subject: msg.subject,
+                    reply_to: if !msg.reply.is_empty() { Some(msg.reply) } else { None },
+                    payload: msg.data,
+                    timestamp: msg.timestamp,
+                    sequence: msg.sequence,
+                    redelivered: msg.redelivered,
+                    ack_inbox: Some(ack_inbox.clone()),
+                    ack_handler,
+                };
+                Poll::Ready(Some(stan_msg))
+            }
+            Poll::Ready(Some(ClosableMessage::Close)) => {
+                Poll::Ready(None)
+            }
+            Poll::Pending => {
+                Poll::Pending
+            }
+            Poll::Ready(None) => {
+                Poll::Ready(None)
+            }
+        }
     }
 }

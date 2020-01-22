@@ -1,4 +1,5 @@
 use std::io;
+use futures::task::SpawnError;
 
 macro_rules! from_error {
     ($type:ty, $target:ident, $targetvar:expr) => {
@@ -29,14 +30,17 @@ pub enum RatsioError {
     #[fail(display = "UTF8Error: {}", _0)]
     UTF8Error(::std::string::FromUtf8Error),
     /// Error on TLS handling
-    #[fail(display = "TlsError: {}", _0)]
-    TlsError(::native_tls::Error),
     // Occurs when the host is not provided, removing the ability for TLS to function correctly for server identify verification
     #[fail(display = "NoRouteToHostError: Host is missing, can't verify server identity")]
     NoRouteToHostError,
     /// Cannot parse an URL
-    #[fail(display = "UrlParseError: {}", _0)]
-    UrlParseError(::url::ParseError),
+    #[fail(display = "Request Stream closed before a result was obtained.")]
+    RequestStreamClosed,
+
+    /// Cannot decode protobuf message
+    #[fail(display = "Request Stream closed before a result was obtained.")]
+    ProstDecodeError(prost::DecodeError),
+
     /// Cannot parse an IP
     #[fail(display = "AddrParseError: {}", _0)]
     AddrParseError(::std::net::AddrParseError),
@@ -51,6 +55,9 @@ pub enum RatsioError {
     /// Something went wrong in one of the Reciever/Sender pairs
     #[fail(display = "InnerBrokenChain: the sender/receiver pair has been disconnected")]
     InnerBrokenChain,
+    /// Something unexpected went wrong
+    #[fail(display = "InternalServerError: something unexpected went wrong")]
+    InternalServerError,
     /// The user supplied a too big payload for the server
     #[fail(
         display = "MaxPayloadOverflow: the given payload exceeds the server setting (max_payload_size = {})",
@@ -69,6 +76,9 @@ pub enum RatsioError {
 
     #[fail(display = "Missing ack_inbox for acknowledgement")]
     AckInboxMissing,
+
+    #[fail(display = "SpawnError for {}", _0)]
+    SpawnError(SpawnError)
 }
 
 impl From<io::Error> for RatsioError {
@@ -82,12 +92,6 @@ impl From<io::Error> for RatsioError {
     }
 }
 
-impl<T> From<::futures::sync::mpsc::SendError<T>> for RatsioError {
-    fn from(_: ::futures::sync::mpsc::SendError<T>) -> Self {
-        RatsioError::InnerBrokenChain
-    }
-}
-
 impl From<RatsioError> for () {
     fn from(err: RatsioError) -> Self {
          error!(target:"ratsio", "Rats-io error => {}", err);
@@ -95,7 +99,8 @@ impl From<RatsioError> for () {
 }
 
 from_error!(::std::string::FromUtf8Error, RatsioError, RatsioError::UTF8Error);
-from_error!(::native_tls::Error, RatsioError, RatsioError::TlsError);
+//from_error!(::native_tls::Error, RatsioError, RatsioError::TlsError);
 from_error!(String, RatsioError, RatsioError::GenericError);
-from_error!(::url::ParseError, RatsioError, RatsioError::UrlParseError);
+from_error!(SpawnError, RatsioError, RatsioError::SpawnError);
+from_error!(prost::DecodeError, RatsioError, RatsioError::ProstDecodeError);
 //from_error!(::std::net::AddrParseError, RatsioError, RatsioError::AddrParseError);
