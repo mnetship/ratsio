@@ -411,9 +411,10 @@ impl StanClient {
         let mut pub_req_buf: Vec<u8> = Vec::with_capacity(64);
         pub_msg.encode(&mut pub_req_buf).unwrap();
         let client_info = self.client_info.read().await;
-        self.nats_client.publish(format!(
+        let subject = format!(
             "{}.{}", client_info.pub_prefix, subject
-        ), pub_req_buf.as_slice()).await
+        );
+        self.nats_client.publish(subject, pub_req_buf.as_slice()).await
     }
 
     pub async fn un_subscribe(&self, stan_sid: &StanSid) -> Result<(), RatsioError> {
