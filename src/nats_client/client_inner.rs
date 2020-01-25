@@ -79,12 +79,8 @@ impl NatsClientInner {
         let stream_self = self_arc.clone();
         let _ = tokio::spawn(async move {
             while let Some(item) = stream.next().await {
-                let current_version = if let Ok(version) = stream_self.reconnect_version.read() {
-                    *version
-                } else {
-                    1
-                };
-                if current_version != version {
+                let current_version = stream_self.reconnect_version.read().await;
+                if *current_version != version {
                     break;
                 }
                 stream_self.process_nats_event(item).await
@@ -107,9 +103,8 @@ impl NatsClientInner {
             jwt: None,
         });
         self_arc.send_command(connect).await?;
-        if let Ok(mut state_guard) = self_arc.state.write() {
-            *state_guard = NatsClientState::Connected;
-        }
+        let mut state_guard = self_arc.state.write().await;
+        *state_guard = NatsClientState::Connected;
         Ok(())
     }
 
@@ -122,15 +117,14 @@ impl NatsClientInner {
     }
 
     pub(in crate::nats_client) async fn process_nats_event(&self, item: Op) {
-        self.ping_pong_reset();
+        self.ping_pong_reset().await;
         match item {
             Op::CLOSE => {
                 let _ = self.stop().await;
             }
             Op::INFO(server_info) => {
-                if let Ok(mut info) = self.server_info.write() {
-                    *info = Some(server_info)
-                }
+                let mut info = self.server_info.write().await;
+                *info = Some(server_info)
             }
             Op::PING => {
                 match self.send_command(Op::PONG).await {
@@ -155,10 +149,9 @@ impl NatsClientInner {
         }
     }
 
-    pub(in crate::nats_client) fn ping_pong_reset(&self) {
-        if let Ok(mut last_ping) = self.last_ping.write() {
-            *last_ping = Self::time_in_millis();
-        }
+    pub(in crate::nats_client) async fn ping_pong_reset(&self) {
+        let mut last_ping = self.last_ping.write().await;
+        *last_ping = Self::time_in_millis();
     }
 
     pub(in crate::nats_client) async fn subscribe(
@@ -226,12 +219,11 @@ impl NatsClientInner {
     }
 
     pub(in crate::nats_client) async fn stop(&self) -> Result<(), RatsioError> {
-        if let Ok(mut state_guard) = self.state.write() {
-            *state_guard = NatsClientState::Shutdown;
-        }
-        if let Ok(mut reconnect) = self.on_reconnect.lock() {
-            *reconnect = None;
-        }
+        let mut state_guard = self.state.write().await;
+        *state_guard = NatsClientState::Shutdown;
+
+        let mut reconnect = self.on_reconnect.lock().await;
+        *reconnect = None;
 
         //Close all subscritions.
         let mut subscriptions = self.subscriptions.lock().await;
@@ -244,60 +236,48 @@ impl NatsClientInner {
             let _ = self.send_command(cmd).await;
         }
         subscriptions.clear();
-        if let Ok(mut client_ref) = self.client_ref.write() {
-            *client_ref = None
-        }
+        let mut client_ref = self.client_ref.write().await;
+        *client_ref = None;
+
         Ok(())
     }
 
     pub async fn reconnect(&self) -> Result<(), RatsioError> {
-        if let Ok(mut state_guard) = self.state.write() {
-            if *state_guard == NatsClientState::Disconnected {
-                *state_guard = NatsClientState::Reconnecting;
-            } else {
-                return Ok(());
-            }
+        let mut state_guard = self.state.write().await;
+        if *state_guard == NatsClientState::Disconnected {
+            *state_guard = NatsClientState::Reconnecting;
         } else {
-            return Err(RatsioError::CannotReconnectToServer);
+            return Ok(());
         }
 
         match self.do_reconnect().await {
             Ok(_) => {
-                if let Ok(mut state_guard) = self.state.write() {
-                    *state_guard = NatsClientState::Connected;
-                }
+                let mut state_guard = self.state.write().await;
+                *state_guard = NatsClientState::Connected;
                 Ok(())
             }
             Err(err) => {
                 error!("Error trying to reconnect to NATS {:?}", err);
-                if let Ok(mut state_guard) = self.state.write() {
-                    *state_guard = NatsClientState::Disconnected;
-                }
+                let mut state_guard = self.state.write().await;
+                *state_guard = NatsClientState::Disconnected;
                 Err(err)
             }
         }
     }
 
     async fn do_reconnect(&self) -> Result<(), RatsioError> {
-        let client_ref = if let Ok(client_ref_guard) = self.client_ref.read() {
-            if let Some(client_ref) = client_ref_guard.as_ref() {
-                client_ref.clone()
-            } else {
-                return Err(RatsioError::CannotReconnectToServer);
-            }
+        let client_ref_guard = self.client_ref.read().await;
+        let client_ref = if let Some(client_ref) = client_ref_guard.as_ref() {
+            client_ref.clone()
         } else {
-            return Err(RatsioError::InternalServerError);
+            return Err(RatsioError::CannotReconnectToServer);
         };
         let tcp_stream = Self::try_connect(self.opts.clone(), &self.opts.cluster_uris.0, true).await?;
         let (sink, stream) = NatsTcpStream::new(tcp_stream).await.split();
         *self.conn_sink.lock().await = sink;
-        let new_version = if let Ok(mut version) = self.reconnect_version.write() {
-            let new_version = *version + 1;
-            *version = new_version;
-            new_version
-        } else {
-            return Err(RatsioError::CannotReconnectToServer);
-        };
+        let mut version = self.reconnect_version.write().await;
+        let new_version = *version + 1;
+        *version = new_version;
         info!("Reconnecting to NATS servers 4 - new version {}", new_version);
         let _ = NatsClientInner::start(client_ref.inner.clone(), new_version, stream).await?;
         if self.opts.subscribe_on_reconnect {
@@ -313,7 +293,7 @@ impl NatsClientInner {
                 }
             }
         }
-        client_ref.on_reconnect();
+        client_ref.on_reconnect().await;
         Ok(())
     }
 
@@ -327,10 +307,9 @@ impl NatsClientInner {
         let ping_max_out = u128::from(self.opts.ping_max_out);
         loop {
             let _ = Delay::new(Duration::from_millis((ping_interval / 2) as u64)).await;
-            if let Ok(state_guard) = self.state.read() {
-                if *state_guard == NatsClientState::Shutdown {
-                    break;
-                }
+            let state_guard = self.state.read().await;
+            if *state_guard == NatsClientState::Shutdown {
+                break;
             }
 
             let mut reconnect_required = false;
@@ -344,21 +323,19 @@ impl NatsClientInner {
             if !reconnect_required {
                 let _ = Delay::new(Duration::from_millis((ping_interval / 2) as u64)).await;
                 let now = Self::time_in_millis();
-                if let Ok(last_ping) = self.last_ping.read() {
-                    if now - *last_ping > ping_interval {
-                        error!("Missed ping interval")
-                    }
-                    if (now - *last_ping) > (ping_max_out * ping_interval) {
-                        reconnect_required = true;
-                    }
+                let last_ping = self.last_ping.read().await;
+                if now - *last_ping > ping_interval {
+                    error!("Missed ping interval")
+                }
+                if (now - *last_ping) > (ping_max_out * ping_interval) {
+                    reconnect_required = true;
                 }
             }
 
             if reconnect_required {
                 error!("Missed too many pings, reconnect is required.");
-                if let Ok(mut state_guard) = self.state.write() {
-                    *state_guard = NatsClientState::Disconnected
-                }
+                let mut state_guard = self.state.write().await;
+                *state_guard = NatsClientState::Disconnected;
                 let _ = self.reconnect().await;
             }
         }

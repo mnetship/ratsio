@@ -2,7 +2,6 @@ use ratsio::nats_client::NatsClient;
 use log::info;
 use futures::StreamExt;
 use ratsio::error::RatsioError;
-use prost::Message;
 use ratsio::protocol;
 use ratsio::nuid;
 
@@ -56,16 +55,16 @@ async fn test1() -> Result<(), RatsioError> {
     let _ = nats_client.publish("foo", b"Publish Message 2").await?;
 
 
-    let discover_subject = "_STAN.discover.test-cluster";
+    let _discover_subject = "_STAN.discover.test-cluster";
     let client_id = "test-1";
     let conn_id = nuid::next();
     let heartbeat_inbox = format!("_HB.{}", &conn_id);
-    let connect_request = protocol::ConnectRequest {
+    let _connect_request = protocol::ConnectRequest {
         client_id: client_id.into(),
         conn_id: conn_id.clone().as_bytes().into(),
         heartbeat_inbox: heartbeat_inbox.clone(),
         ..Default::default()
     };
-    thread::sleep(time::Duration::from_secs(2));
+    tokio::time::delay_for(std::time::Duration::from_secs(2)).await;
     Ok(())
 }

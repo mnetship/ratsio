@@ -4,7 +4,10 @@ mod client_inner;
 
 use crate::net::nats_tcp_stream::NatsTcpStream;
 use crate::ops::{ServerInfo, Op, Message, Subscribe};
-use std::sync::{Arc, RwLock};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use std::fmt::Debug;
 use futures::stream::{ SplitSink};
@@ -111,7 +114,7 @@ pub struct NatsClientInner {
     /// Server info
     server_info: RwLock<Option<ServerInfo>>,
     subscriptions: Arc<Mutex<HashMap<String, (UnboundedSender<ClosableMessage>, Subscribe)>>>,
-    on_reconnect: std::sync::Mutex<Option<Box<dyn Fn() -> () + Send + Sync>>>,
+    on_reconnect: tokio::sync::Mutex<Option<Pin<Box<dyn Future<Output=()> + Send + Sync>>>>,
     state: RwLock<NatsClientState>,
     last_ping: RwLock<u128>,
     client_ref: RwLock<Option<Arc<NatsClient>>>,

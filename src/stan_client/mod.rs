@@ -3,11 +3,9 @@ use crate::nuid::NUID;
 
 use std::{
     collections::HashMap,
-    sync::{
-        Arc,
-        RwLock,
-    },
+    sync::Arc,
 };
+use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedSender;
 use failure::_core::fmt::{Debug, Formatter, Error};
 

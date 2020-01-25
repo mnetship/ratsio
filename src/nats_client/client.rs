@@ -3,7 +3,8 @@ use crate::ops::{Subscribe, Message, Publish};
 use futures::{StreamExt};
 use crate::nats_client::{NatsClient, NatsClientOptions, NatsClientInner, NatsSid, ReconnectHandler, NatsClientState};
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use crate::error::RatsioError;
 
 use futures::lock::Mutex;
@@ -25,7 +26,7 @@ impl NatsClient {
                 opts,
                 server_info: RwLock::new(None),
                 subscriptions: Arc::new(Mutex::new(HashMap::default())),
-                on_reconnect: std::sync::Mutex::new(None),
+                on_reconnect: tokio::sync::Mutex::new(None),
                 state: RwLock::new(NatsClientState::Connecting),
                 last_ping: RwLock::new(NatsClientInner::time_in_millis()),
                 reconnect_version: RwLock::new(version),
@@ -44,13 +45,17 @@ impl NatsClient {
         let arc_client = Arc::new(client);
         let reconn_client = arc_client.clone();
 
-
-        if let Ok(mut client_ref) = arc_client.inner.client_ref.write() {
+        {
+            let mut client_ref = arc_client.inner.client_ref.write().await;
             *client_ref = Some(arc_client.clone());
         }
 
-        if let Ok(mut reconnect) = arc_client.inner.on_reconnect.lock() {
-            *reconnect = Some(Box::new(move || { reconn_client.on_reconnect() }));
+        {
+            let mut reconnect = arc_client.inner.on_reconnect.lock().await;
+            let reconnect_f = async move {
+                reconn_client.on_reconnect().await
+            };
+            *reconnect = Some(Box::pin(reconnect_f));
         }
 
         //heartbeat monitor
@@ -143,19 +148,18 @@ impl NatsClient {
         self.inner.stop().await
     }
 
-    pub fn add_reconnect_handler(&self, handler: ReconnectHandler) -> Result<(), RatsioError> {
-        if let Ok(mut handlers) = self.reconnect_handlers.write() {
-            handlers.push(handler);
-        }
+    pub async fn add_reconnect_handler(&self, handler: ReconnectHandler) -> Result<(), RatsioError> {
+        let mut handlers = self.reconnect_handlers.write().await;
+        handlers.push(handler);
+
         Ok(())
     }
 
-    pub (in crate::nats_client) fn on_reconnect(&self) -> () {
-        if let Ok(handlers) = self.reconnect_handlers.read() {
-            let handlers: &Vec<ReconnectHandler> = handlers.as_ref();
-            for handler in handlers {
-                handler(self)
-            }
+    pub (in crate::nats_client) async fn on_reconnect(&self) -> () {
+        let handlers = self.reconnect_handlers.read().await;
+        let handlers: &Vec<ReconnectHandler> = handlers.as_ref();
+        for handler in handlers {
+            handler(self)
         }
     }
 }
