@@ -43,7 +43,7 @@ lazy_static         = "^1.2"
 derive_builder      = "^0.7"
 
 atomic-counter      = "^1.0"
-nkeys               = "^0.0.8"
+nkeys               = "^0.0.9"
 sha2                = "^0.8"
 
 data-encoding       = "^2.1.2"
