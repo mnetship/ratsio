@@ -8,7 +8,7 @@ Add the following to your Cargo.toml.
 
 ```rust
 [dependencies]
-ratsio = "0.3.0-alpha.3"
+ratsio = "0.3.0-alpha.4"
 ```
 Rust -stable, -beta and -nightly are supported.
 
@@ -164,6 +164,8 @@ See examples in examples/ folder.
 
 ## Version 0.3.0-alpha.3
 This is the first async/await that works, but still missing features from version 0.2.
+## Version 0.3.0-alpha.4
+Replaced std::sync::RwLock with futures::lock::Mutex for + Send + Sync capabilities.
 
 
 # Contact

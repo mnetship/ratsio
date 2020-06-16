@@ -5,11 +5,11 @@ use std::{
     collections::HashMap,
     sync::{
         Arc,
-        RwLock,
     },
 };
+use futures::lock::Mutex as RwLock;
 use tokio::sync::mpsc::UnboundedSender;
-use failure::_core::fmt::{Debug, Formatter, Error};
+use std::fmt::{Debug, Formatter, Error};
 
 pub mod client;
 
