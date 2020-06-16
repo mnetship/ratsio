@@ -410,14 +410,14 @@ impl StanClient {
 
     async fn send_inner(&self, subject: String, reply_to: Option<String>, payload: &[u8]) -> Result<(), RatsioError> {
         let mut hasher = Sha256::new();
-        hasher.input(payload);
+        hasher.update(payload);
 
         let conn_id = self.conn_id.read()
             .map(|i| i.clone()).unwrap_or_default();
         let guid = self.id_generator.write()
             .map(|mut i| i.next()).unwrap_or_default();
         let pub_msg = protocol::PubMsg {
-            sha256: Vec::from(&hasher.result()[..]),
+            sha256: Vec::from(&hasher.finalize()[..]),
             client_id: self.client_id.clone(),
             subject: subject.clone(),
             reply: reply_to.unwrap_or_default(),

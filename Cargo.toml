@@ -1,6 +1,6 @@
 [package]
 name = "ratsio"
-version = "0.3.0-alpha.2"
+version = "0.3.0-alpha.3"
 readme = "README.md"
 authors = ["Michael Netshipise <michael@zulzi.com>"]
 description = "Ratsio is a Rust client library for NATS messaging system and NATS Event Streaming."
@@ -43,8 +43,8 @@ lazy_static         = "^1.2"
 derive_builder      = "^0.7"
 
 atomic-counter      = "^1.0"
-nkeys               = "^0.0.8"
-sha2                = "^0.8"
+nkeys               = {version="^0.0.9", optional=true}
+sha2                = "^0.9"
 
 data-encoding       = "^2.1.2"
 env_logger = {version="^0.7"}

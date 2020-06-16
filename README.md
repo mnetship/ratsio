@@ -162,7 +162,7 @@ Breaking API changes from 0.2
 This is the first async/await compatible version, it's not production ready yet, still work in progress.
 See examples in examples/ folder.
 
-## Version 0.3.0-alpha.2
+## Version 0.3.0-alpha.3
 This is the first async/await that works, but still missing features from version 0.2.
 
 
