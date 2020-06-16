@@ -24,3 +24,4 @@ pub mod stan_client;
 pub use nats_client::{NatsMessage, NatsSid, NatsClient, NatsClientOptions};
 pub use stan_client::{StanMessage, StanSid, StanClient, StanOptions, StartPosition};
 pub use error::RatsioError;
+

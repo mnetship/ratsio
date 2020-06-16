@@ -102,9 +102,10 @@ impl NatsClientInner {
             lang: "rust".to_string(),
             version: "0.3.0".to_string(),
             protocol: 1,
-            echo: true,
+            echo: false,
             sig: None,
             jwt: None,
+            nkey: None,
         });
         self_arc.send_command(connect).await?;
         if let Ok(mut state_guard) = self_arc.state.write() {

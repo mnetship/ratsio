@@ -256,7 +256,7 @@ impl StanClient {
         self.subscribe_inner(subject.to_string(), queue_group.map(|i| i.to_string()),
                              durable_name.map(|i| i.to_string()),
                              DEFAULT_MAX_INFLIGHT, DEFAULT_ACK_WAIT,
-                             StartPosition::First, 0, None, false).await
+                             StartPosition::LastReceived, 0, None, false).await
     }
 
     pub async fn subscribe_with_manual_ack<T>(
@@ -394,21 +394,21 @@ impl StanClient {
 
     pub async fn publish<T>(&self, subject: T, payload: &[u8]) -> Result<(), RatsioError>
         where T: ToString {
-        self.publish_inner(subject.to_string(), None, payload).await
+        self.send_inner(subject.to_string(), None, payload).await
     }
 
-    pub async fn publish_with_reply<T>(&self, subject: T, reply_to: T, payload: &[u8]) -> Result<(), RatsioError>
+    pub async fn send_with_reply<T>(&self, subject: T, reply_to: T, payload: &[u8]) -> Result<(), RatsioError>
         where T: ToString {
-        self.publish_inner(subject.to_string(), Some(reply_to.to_string()), payload).await
+        self.send_inner(subject.to_string(), Some(reply_to.to_string()), payload).await
     }
 
-    pub async fn publish_with<T>(&self, message: T) -> Result<(), RatsioError>
+    pub async fn send_with<T>(&self, message: T) -> Result<(), RatsioError>
         where T: Into<StanMessage> {
         let message = message.into();
-        self.publish_inner(message.subject.clone(), message.reply_to.clone(), &message.payload[..]).await
+        self.send_inner(message.subject.clone(), message.reply_to.clone(), &message.payload[..]).await
     }
 
-    async fn publish_inner(&self, subject: String, reply_to: Option<String>, payload: &[u8]) -> Result<(), RatsioError> {
+    async fn send_inner(&self, subject: String, reply_to: Option<String>, payload: &[u8]) -> Result<(), RatsioError> {
         let mut hasher = Sha256::new();
         hasher.input(payload);
 

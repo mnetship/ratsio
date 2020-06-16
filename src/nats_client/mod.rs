@@ -51,6 +51,10 @@ pub struct NatsClientOptions {
     pub reconnect_timeout: u64,
     /// When using NATS 2.x decentralized security, supply a user JWT for authN/authZ
     pub user_jwt: Option<UserJWT>,
+    /// Nkey authentication
+    pub nkey: Option<String>,
+
+
 }
 
 impl Default for NatsClientOptions {
@@ -71,6 +75,7 @@ impl Default for NatsClientOptions {
             ensure_connect: true,
             reconnect_timeout: 1000,
             user_jwt: None,
+            nkey: None,
         }
     }
 }

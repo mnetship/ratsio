@@ -17,9 +17,9 @@ Rust -stable, -beta and -nightly are supported.
 - [x] Nats cluster support, auto reconnect 
 - [ ] Dynamic cluster hosts update. 
 - [x] Async from the ground up, using  [tokio](https://crates.io/crates/tokio) and [futures](https://crates.io/crates/futures).
-- [?] TLS mode
+- [ ] TLS mode
 - [x] NATS 1.x Authentication
-- [?] NATS 2.0 JWT-based client authentication
+- [ ] NATS 2.0 JWT-based client authentication
 - [x] NATS Streaming Server
 # Usage
 
@@ -161,6 +161,9 @@ All version 0.2.* related information is available here [Version 0.2.*](https://
 Breaking API changes from 0.2
 This is the first async/await compatible version, it's not production ready yet, still work in progress.
 See examples in examples/ folder.
+
+## Version 0.3.0-alpha.2
+This is the first async/await that works, but still missing features from version 0.2.
 
 
 # Contact

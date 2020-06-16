@@ -227,6 +227,7 @@ pub struct Connect {
     pub echo: bool,
     pub sig: Option<String>,
     pub jwt: Option<String>,
+    pub nkey: Option<String>,
 }
 
 impl Connect {}
@@ -260,6 +261,9 @@ impl ToString for Connect {
         if let Some(ref jwt) = self.jwt {
             buff.push_str(&format!(r#","jwt": "{}""#, jwt));
         }
+        if let Some(ref nkey) = self.nkey {
+            buff.push_str(&format!(r#","nkey": "{}""#, nkey));
+        }
         buff.push_str("}");
         buff
     }
@@ -281,6 +285,7 @@ impl Default for Connect {
             echo: true,
             sig: None,
             jwt: None,
+            nkey: None,
         }
     }
 }
@@ -302,6 +307,7 @@ impl From<JsonValue> for Connect {
                 echo: get_json_boolean!(obj, "tls_verify", true),
                 sig: get_json_opt_string!(obj, "sig"),
                 jwt: get_json_opt_string!(obj, "jwt"),
+                nkey: get_json_opt_string!(obj, "nkey"),
             },
             _ => Connect::default(),
         }
@@ -601,9 +607,9 @@ fn ser_connect() {
     match Op::CONNECT(Connect {
         verbose: false,
         pedantic: false,
-        version: String::from("1.2.2"),
+        version: String::from("0.3.0"),
         protocol: 1,
-        lang: String::from("go"),
+        lang: String::from("rust"),
         name: Some(String::from("")),
         tls_required: false,
         user: None,
@@ -612,13 +618,14 @@ fn ser_connect() {
         echo: true,
         sig: None,
         jwt: None,
+        nkey: None,
     })
         .into_bytes()
         {
             Ok(b) => {
                 println!(" -----------=> \n{}", String::from_utf8(Vec::from(&b[..])).unwrap());
                 //                                           {"verbose": false,"pedantic": false,"tls_required": false,"name": "","lang": "go","version": "1.2.2","protocol": 1,"echo": "true"}
-                let c = format!("CONNECT\t{}\r\n", r#"{"verbose": false,"pedantic": false,"tls_required": false,"name": "","lang": "go","version": "1.2.2","protocol": 1,"echo": true}"#);
+                let c = format!("CONNECT\t{}\r\n", r#"{"verbose": false,"pedantic": false,"tls_required": false,"name": "","lang": "rust","version": "0.3.0","protocol": 1,"echo": true}"#);
                 assert_eq!(&b[..], c.as_bytes());
             }
             Err(_) => {
