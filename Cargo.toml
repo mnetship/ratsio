@@ -1,6 +1,6 @@
 [package]
 name = "ratsio"
-version = "0.3.0-alpha.4"
+version = "0.3.0-alpha.5"
 readme = "README.md"
 authors = ["Michael Netshipise <michael@zulzi.com>"]
 description = "Ratsio is a Rust client library for NATS messaging system and NATS Event Streaming."
