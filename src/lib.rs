@@ -1,8 +1,6 @@
 #[macro_use]
 extern crate nom;
 #[macro_use]
-extern crate failure_derive;
-#[macro_use]
 extern crate log;
 #[macro_use]
 extern crate lazy_static;

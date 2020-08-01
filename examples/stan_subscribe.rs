@@ -48,6 +48,7 @@ async fn main() -> Result<(), RatsioError> {
     }).expect("Error setting Ctrl-C handler");
 
     while let Some(message) = subscription.next().await {
+
         info!("{:?}\n\t{:?}", &message,
               String::from_utf8_lossy(message.payload.as_ref()));
     }
