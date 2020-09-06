@@ -2,8 +2,9 @@ use ratsio::nats_client::NatsClient;
 use log::info;
 use futures::StreamExt;
 use ratsio::error::RatsioError;
-use std::{thread, time};
 
+use ratsio::protocol;
+use ratsio::nuid;
 
 pub fn logger_setup() {
     use log::LevelFilter;
@@ -63,9 +64,24 @@ async fn test1() -> Result<(), RatsioError> {
     thread::sleep(time::Duration::from_secs(3));
     info!( " ---- test 7 publish");
     thread::sleep(time::Duration::from_secs(1));
-    let _ = nats_client.publish("foo_2", b"Publish Message 2").await?;
-    info!( " ---- test 8 sleep"); */
+
+    let _ = nats_client.publish("foo", b"Publish Message 2").await?;
+
+
+    let _discover_subject = "_STAN.discover.test-cluster";
+    let client_id = "test-1";
+    let conn_id = nuid::next();
+    let heartbeat_inbox = format!("_HB.{}", &conn_id);
+    let _connect_request = protocol::ConnectRequest {
+        client_id: client_id.into(),
+        conn_id: conn_id.clone().as_bytes().into(),
+        heartbeat_inbox: heartbeat_inbox.clone(),
+        ..Default::default()
+    };
+    tokio::time::delay_for(std::time::Duration::from_secs(2)).await;
+
     thread::sleep(time::Duration::from_secs(60));
     info!( " ---- test 9 done");
+    */
     Ok(())
 }

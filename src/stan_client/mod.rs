@@ -3,11 +3,10 @@ use crate::nuid::NUID;
 
 use std::{
     collections::HashMap,
-    sync::{
-        Arc,
-    },
+    sync::Arc,
 };
-use futures::lock::Mutex as RwLock;
+use tokio::sync::RwLock;
+
 use tokio::sync::mpsc::UnboundedSender;
 use std::fmt::{Debug, Formatter, Error};
 
