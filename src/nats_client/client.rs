@@ -11,7 +11,6 @@ use futures::lock::Mutex;
 use nom::lib::std::collections::{HashMap};
 use futures::stream::Stream;
 
-
 impl NatsClient {
     pub async fn new<O>(options: O) -> Result<Arc<Self>, RatsioError>
         where O: Into<NatsClientOptions> {

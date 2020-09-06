@@ -6,8 +6,9 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::RwLock;
+
 use tokio::sync::mpsc::UnboundedSender;
-use failure::_core::fmt::{Debug, Formatter, Error};
+use std::fmt::{Debug, Formatter, Error};
 
 pub mod client;
 

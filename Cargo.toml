@@ -1,6 +1,6 @@
 [package]
 name = "ratsio"
-version = "0.3.0-alpha.1"
+version = "0.3.0-alpha.5"
 readme = "README.md"
 authors = ["Michael Netshipise <michael@zulzi.com>"]
 description = "Ratsio is a Rust client library for NATS messaging system and NATS Event Streaming."
@@ -24,8 +24,7 @@ bytes               = "^0.4"
 prost               = "^0.6"
 log                 = "^0.4"
 cfg-if              = "^0.1"
-failure             = "^0.1"
-failure_derive      = "^0.1"
+thiserror           = "1"
 futures             = {version="^0.3"}
 futures-core        = "^0.3"
 futures-timer       = "^2.0"
@@ -43,8 +42,8 @@ lazy_static         = "^1.2"
 derive_builder      = "^0.7"
 
 atomic-counter      = "^1.0"
-nkeys               = "^0.0.8"
-sha2                = "^0.8"
+nkeys               = {version="^0.0.9", optional=true}
+sha2                = "^0.9"
 
 data-encoding       = "^2.1.2"
 env_logger = {version="^0.7"}
@@ -52,6 +51,9 @@ env_logger = {version="^0.7"}
 
 [build-dependencies]
 prost-build = "0.6"
+
+[dev-dependencies]
+ctrlc = "3.1"
 
 [features]
 default = ["tls"]

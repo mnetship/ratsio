@@ -20,7 +20,7 @@ use crate::parser::operation;
 use nom::Err as NomErr;
 use crate::error::RatsioError;
 use std::fmt::Debug;
-use failure::_core::fmt::{Formatter, Error};
+use std::fmt::{Formatter, Error};
 
 /// A simple wrapper type that can either be a raw TCP stream or a TCP stream with TLS enabled.
 #[pin_project]
