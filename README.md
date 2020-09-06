@@ -155,7 +155,7 @@ async fn main() -> Result<(), RatsioError> {
 #  Important Changes
 
 ## Version 0.2
-All version 0.2.* related information is available here [Version 0.2.*](https://github.com/mnetship/ratsio/tree/ratsio-0.2https://github.com/mnetship/ratsio/tree/ratsio-0.2). 
+All version 0.2.* related information is available here [Version 0.2.*](https://github.com/mnetship/ratsio/tree/ratsio-0.2). 
 
 ## Version 0.3.0-alpha.1
 Breaking API changes from 0.2
