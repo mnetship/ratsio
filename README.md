@@ -8,7 +8,7 @@ Add the following to your Cargo.toml.
 
 ```rust
 [dependencies]
-ratsio = "0.3.0-alpha.5"
+ratsio = "0.3.0-alpha.6"
 ```
 Rust -stable, -beta and -nightly are supported.
 
@@ -168,6 +168,8 @@ This is the first async/await that works, but still missing features from versio
 Replaced std::sync::RwLock with futures::lock::Mutex for + Send + Sync capabilities.
 ## Version 0.3.0-alpha.5
 Replaced failure::* with thiserror crate.
+## Version 0.3.0-alpha.6
+Merged pull requests [12](https://github.com/mnetship/ratsio/pull/12) and [13](  https://github.com/mnetship/ratsio/pull/13)
 
 
 # Contact
