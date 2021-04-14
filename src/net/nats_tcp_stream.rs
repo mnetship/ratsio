@@ -1,26 +1,28 @@
-#[cfg(feature = "tls")]
-use native_tls::{self, TlsConnector};
-use pin_project::{pin_project, project};
 use std::{
     pin::Pin,
     task::{Context, Poll},
 };
+use std::fmt::{Error, Formatter};
+use std::fmt::Debug;
+
+use bytes::{Buf, BytesMut};
+use futures::{Sink, Stream};
+use futures_core::ready;
+#[cfg(feature = "tls")]
+use native_tls::{self, TlsConnector};
+use nom::Err as NomErr;
+use pin_project::{pin_project, project};
 use tokio::{
     io::{self, AsyncRead, AsyncWrite},
     net::TcpStream,
 };
+use tokio::io::ReadBuf;
 #[cfg(feature = "tls")]
-use tokio_tls::{TlsConnector as TokioTlsConnector, TlsStream};
-use futures::{Stream, Sink};
-use crate::ops::Op;
-use bytes::BytesMut;
+use tokio_native_tls::{TlsConnector as TokioTlsConnector, TlsStream};
 
-use futures_core::ready;
-use crate::parser::operation;
-use nom::Err as NomErr;
 use crate::error::RatsioError;
-use std::fmt::Debug;
-use std::fmt::{Formatter, Error};
+use crate::ops::Op;
+use crate::parser::operation;
 
 /// A simple wrapper type that can either be a raw TCP stream or a TCP stream with TLS enabled.
 #[pin_project]
@@ -68,10 +70,10 @@ impl AsyncRead for NatsTcpStreamInner {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
         #[project]
-            match self.project() {
+        match self.project() {
             NatsTcpStreamInner::PlainStream(stream) => stream.poll_read(cx, buf),
             #[cfg(feature = "tls")]
             NatsTcpStreamInner::TlsStream(stream) => stream.poll_read(cx, buf),
@@ -83,7 +85,7 @@ impl AsyncWrite for NatsTcpStreamInner {
     #[project]
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
         #[project]
-            match self.project() {
+        match self.project() {
             NatsTcpStreamInner::PlainStream(stream) => stream.poll_write(cx, buf),
             #[cfg(feature = "tls")]
             NatsTcpStreamInner::TlsStream(stream) => stream.poll_write(cx, buf),
@@ -93,7 +95,7 @@ impl AsyncWrite for NatsTcpStreamInner {
     #[project]
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         #[project]
-            match self.project() {
+        match self.project() {
             NatsTcpStreamInner::PlainStream(stream) => stream.poll_flush(cx),
             #[cfg(feature = "tls")]
             NatsTcpStreamInner::TlsStream(stream) => stream.poll_flush(cx),
@@ -130,10 +132,14 @@ impl Stream for NatsTcpStream {
         read_buffer.reserve(1);
 
         let mut buff: [u8; 2048] = [0; 2048];
+        let mut buff: ReadBuf = ReadBuf::new(&mut buff);
         loop {
             match this.stream_inner.as_mut().poll_read(cx, &mut buff) {
-                Poll::Ready(Ok(size)) => {
-                    read_buffer.extend(&buff[0..size]);
+                Poll::Ready(Ok(())) => {
+                    let filled = buff.filled();
+                    let size = filled.len();
+                    read_buffer.extend(filled);
+                    buff.clear();
                     //println!(" ----- buffer [{}]\n\t'{}'", size, std::str::from_utf8(read_buffer.as_ref()).unwrap());
                     if size > 0 {
                         match NatsTcpStream::decode(&mut read_buffer) {
@@ -174,7 +180,7 @@ impl Sink<Op> for NatsTcpStream {
                 Poll::Ready(()) => Poll::Ready(Ok(())),
                 Poll::Pending => return Poll::Pending,
             }
-        }else {
+        } else {
             Poll::Ready(Ok(()))
         }
     }
@@ -203,8 +209,7 @@ impl Sink<Op> for NatsTcpStream {
             Err(io::Error::new(
                 io::ErrorKind::Other,
                 "failed to write entire datagram to socket",
-            )
-            .into())
+            ).into())
         };
 
         Poll::Ready(res)
@@ -215,6 +220,7 @@ impl Sink<Op> for NatsTcpStream {
         Poll::Ready(Ok(()))
     }
 }
+
 impl std::fmt::Debug for NatsTcpStream {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "NatsTcpStream()")
@@ -268,11 +274,11 @@ impl NatsTcpStream {
 
         match (op_item, offset) {
             (Some(item), Some(offset)) => {
-                src.split_to(offset);
+                src.advance(offset);
                 Some(item)
             }
             (_, Some(offset)) => {
-                src.split_to(offset);
+                src.advance(offset);
                 None
             }
             _ => {
