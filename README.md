@@ -170,6 +170,9 @@ Replaced std::sync::RwLock with futures::lock::Mutex for + Send + Sync capabilit
 Replaced failure::* with thiserror crate.
 ## Version 0.3.0-alpha.6
 Merged pull requests [#12](https://github.com/mnetship/ratsio/pull/12) and [#13](  https://github.com/mnetship/ratsio/pull/13)
+## Version 0.4.0-alpha.1
+Upgrade to use tokio 1.0
+Merged pull requests [#21](https://github.com/mnetship/ratsio/pull/21) 
 
 
 # Contact
