@@ -11,7 +11,7 @@ use futures_core::ready;
 #[cfg(feature = "tls")]
 use native_tls::{self, TlsConnector};
 use nom::Err as NomErr;
-use pin_project::{pin_project, project};
+use pin_project::pin_project;
 use tokio::{
     io::{self, AsyncRead, AsyncWrite},
     net::TcpStream,
@@ -25,7 +25,7 @@ use crate::ops::Op;
 use crate::parser::operation;
 
 /// A simple wrapper type that can either be a raw TCP stream or a TCP stream with TLS enabled.
-#[pin_project]
+#[pin_project(project = NatsTcpStreamInnerProj)]
 #[derive(Debug)]
 pub enum NatsTcpStreamInner {
     PlainStream(#[pin] TcpStream),
@@ -66,50 +66,42 @@ impl NatsTcpStreamInner {
 
 
 impl AsyncRead for NatsTcpStreamInner {
-    #[project]
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context,
         buf: &mut ReadBuf,
     ) -> Poll<io::Result<()>> {
-        #[project]
         match self.project() {
-            NatsTcpStreamInner::PlainStream(stream) => stream.poll_read(cx, buf),
+            NatsTcpStreamInnerProj::PlainStream(stream) => stream.poll_read(cx, buf),
             #[cfg(feature = "tls")]
-            NatsTcpStreamInner::TlsStream(stream) => stream.poll_read(cx, buf),
+            NatsTcpStreamInnerProj::TlsStream(stream) => stream.poll_read(cx, buf),
         }
     }
 }
 
 impl AsyncWrite for NatsTcpStreamInner {
-    #[project]
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
-        #[project]
         match self.project() {
-            NatsTcpStreamInner::PlainStream(stream) => stream.poll_write(cx, buf),
+            NatsTcpStreamInnerProj::PlainStream(stream) => stream.poll_write(cx, buf),
             #[cfg(feature = "tls")]
-            NatsTcpStreamInner::TlsStream(stream) => stream.poll_write(cx, buf),
+            NatsTcpStreamInnerProj::TlsStream(stream) => stream.poll_write(cx, buf),
         }
     }
 
-    #[project]
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        #[project]
         match self.project() {
-            NatsTcpStreamInner::PlainStream(stream) => stream.poll_flush(cx),
+            NatsTcpStreamInnerProj::PlainStream(stream) => stream.poll_flush(cx),
             #[cfg(feature = "tls")]
-            NatsTcpStreamInner::TlsStream(stream) => stream.poll_flush(cx),
+            NatsTcpStreamInnerProj::TlsStream(stream) => stream.poll_flush(cx),
         }
     }
 
 
-    #[project]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        #[project]
         match self.project() {
-            NatsTcpStreamInner::PlainStream(stream) => stream.poll_shutdown(cx),
+            NatsTcpStreamInnerProj::PlainStream(stream) => stream.poll_shutdown(cx),
             #[cfg(feature = "tls")]
-            NatsTcpStreamInner::TlsStream(stream) => stream.poll_shutdown(cx),
+            NatsTcpStreamInnerProj::TlsStream(stream) => stream.poll_shutdown(cx),
         }
     }
 }
