@@ -63,8 +63,8 @@ pub enum RatsioError {
     SpawnError(#[from] SpawnError)
 }
 
-impl From<RatsioError> for () {
-    fn from(err: RatsioError) -> Self {
-         error!(target:"ratsio", "Rats-io error => {}", err);
-    }
-}
+// impl From<RatsioError> for () {
+//     fn from(err: RatsioError) -> Self {
+//          error!(target:"ratsio", "Rats-io error => {}", err);
+//     }
+// }
