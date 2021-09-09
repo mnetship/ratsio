@@ -9,12 +9,12 @@ pub enum RatsioError {
     #[error("CommandBuildError: {0}")]
     CommandBuildError(String),
     /// Generic IO error from stdlib
-    #[error("IOError: {0:?}")]
-    IOError(#[from] io::Error),
+    // #[error("IOError: {0:?}")]
+    // IOError(#[from] io::Error),
     /// Occurs when the client is not yet connected or got disconnected from the server.
     /// Contains `Some<io::Error>` when it's actually a disconnection or contains `None` when we are not connected at all
-    // #[error("ServerDisconnected: {0:?}")]
-    // ServerDisconnected(#[from] Option<io::Error>),
+    #[error("ServerDisconnected: {0:?}")]
+    ServerDisconnected(#[from] Option<io::Error>),
     /// Protocol error
     /// Occurs if we try to parse a string that is supposed to be valid UTF8 and...is actually not
     #[error("UTF8Error: {0}")]
