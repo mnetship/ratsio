@@ -173,7 +173,9 @@ Merged pull requests [#12](https://github.com/mnetship/ratsio/pull/12) and [#13]
 ## Version 0.4.0-alpha.1
 Upgrade to use tokio 1.0
 Merged pull requests [#21](https://github.com/mnetship/ratsio/pull/21) 
-
+## Version 0.4.0
+Comment unused Error, because if update version thiserror, drop conflict implementation
+Merged pull requests [#23](https://github.com/mnetship/ratsio/pull/23)
 
 # Contact
 For bug reports, patches, feature requests or other messages, please send a mail to michael@zulzi.com
