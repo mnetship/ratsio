@@ -24,7 +24,7 @@ bytes               = "^1"
 prost               = "^0.7"
 log                 = "^0.4"
 cfg-if              = "^0.1"
-thiserror           = "1"
+thiserror           = "1.0.29"
 futures             = {version="^0.3"}
 futures-core        = "^0.3"
 futures-timer       = "^2.0"

@@ -9,8 +9,8 @@ pub enum RatsioError {
     #[error("CommandBuildError: {0}")]
     CommandBuildError(String),
     /// Generic IO error from stdlib
-    #[error("IOError: {0:?}")]
-    IOError(#[from] io::Error),
+    // #[error("IOError: {0:?}")]
+    // IOError(#[from] io::Error),
     /// Occurs when the client is not yet connected or got disconnected from the server.
     /// Contains `Some<io::Error>` when it's actually a disconnection or contains `None` when we are not connected at all
     #[error("ServerDisconnected: {0:?}")]
@@ -63,8 +63,8 @@ pub enum RatsioError {
     SpawnError(#[from] SpawnError)
 }
 
-impl From<RatsioError> for () {
-    fn from(err: RatsioError) -> Self {
-         error!(target:"ratsio", "Rats-io error => {}", err);
-    }
-}
+// impl From<RatsioError> for () {
+//     fn from(err: RatsioError) -> Self {
+//          error!(target:"ratsio", "Rats-io error => {}", err);
+//     }
+// }
