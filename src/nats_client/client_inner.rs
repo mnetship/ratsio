@@ -339,7 +339,7 @@ impl NatsClientInner {
             if reconnect_required {
                 error!("Missed too many pings, reconnect is required.");
                 let mut state_guard = self.state.write().await;
-                warn!("Shit .....")
+                warn!("Shit .....");
                 *state_guard = NatsClientState::Disconnected;
                 let _ = self.reconnect().await;
             }
