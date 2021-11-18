@@ -301,7 +301,7 @@ impl NatsClientInner {
 
                 match self.subscribe(cmd).await {
                     Ok(_) => {info!("re subscribed to => {:?}", subscribe_command.subject.clone());}
-                    Err(_) => {info!(" Failed to resubscribe to => {:?}, reason => {:?}", subscribe_command.clone(), err);}
+                    Err(err) => {info!(" Failed to resubscribe to => {:?}, reason => {:?}", subscribe_command.clone(), err);}
                 }
 
                 // match self.send_command(Op::SUB(subscribe_command.clone())).await {
