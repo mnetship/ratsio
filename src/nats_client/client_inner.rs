@@ -244,12 +244,15 @@ impl NatsClientInner {
     }
 
     pub async fn reconnect(&self) -> Result<(), RatsioError> {
+        warn!("Some shit here 0");
         let mut state_guard = self.state.write().await;
         if *state_guard == NatsClientState::Disconnected {
             *state_guard = NatsClientState::Reconnecting;
         } else {
             return Ok(());
         }
+
+        warn!("Some shit here 1");
 
         match self.do_reconnect().await {
             Ok(_) => {
