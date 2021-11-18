@@ -311,9 +311,11 @@ impl NatsClientInner {
         let ping_max_out = u128::from(self.opts.ping_max_out);
         loop {
             let _ = Delay::new(Duration::from_millis((ping_interval / 2) as u64)).await;
-            let state_guard = self.state.read().await;
-            if *state_guard == NatsClientState::Shutdown {
-                break;
+            {
+                let state_guard = self.state.read().await;
+                if *state_guard == NatsClientState::Shutdown {
+                    break;
+                }
             }
 
             let mut reconnect_required = false;
