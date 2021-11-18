@@ -292,12 +292,18 @@ impl NatsClientInner {
             let subscriptions = self.subscriptions.lock().await;
             for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
 
+                warn!("Zdarova");
+
                 let subject = subscribe_command.subject.clone();
+
+                warn!("Mi v pshe zdec', kurwa");
 
                 let cmd = Subscribe {
                     subject: subject.to_string(),
                     ..Default::default()
                 };
+
+                warn!("Vsyo, paka");
 
                 match self.subscribe(cmd).await {
                     Ok(_) => {info!("re subscribed to => {:?}", subscribe_command.subject.clone());}
