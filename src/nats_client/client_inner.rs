@@ -245,11 +245,13 @@ impl NatsClientInner {
 
     pub async fn reconnect(&self) -> Result<(), RatsioError> {
         warn!("Some shit here 0");
-        let mut state_guard = self.state.write().await;
-        if *state_guard == NatsClientState::Disconnected {
-            *state_guard = NatsClientState::Reconnecting;
-        } else {
-            return Ok(());
+        {
+            let mut state_guard = self.state.write().await;
+            if *state_guard == NatsClientState::Disconnected {
+                *state_guard = NatsClientState::Reconnecting;
+            } else {
+                return Ok(());
+            }
         }
 
         warn!("Some shit here 1");
@@ -340,9 +342,10 @@ impl NatsClientInner {
 
             if reconnect_required {
                 error!("Missed too many pings, reconnect is required.");
-                let mut state_guard = self.state.write().await;
-                warn!("Shit .....");
-                *state_guard = NatsClientState::Disconnected;
+                {
+                    let mut state_guard = self.state.write().await;
+                    *state_guard = NatsClientState::Disconnected;
+                }
                 let _ = self.reconnect().await;
             }
         }
