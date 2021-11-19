@@ -237,7 +237,7 @@ impl Default for StanSubscribe {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Subscription {
     client_id: String,
     subject: String,
