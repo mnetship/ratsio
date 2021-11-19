@@ -162,8 +162,12 @@ impl StanClient {
         let connect_response = self.nats_client.request(discover_subject, connect_request_buf.as_slice()).await?;
         let connect_response = protocol::ConnectResponse::decode(connect_response.payload.as_slice())?;
         let client_info: ClientInfo = connect_response.into();
+
+        debug!("Before locks");
         *self.client_info.write().await = client_info.clone();
+        debug!("Debug after first lock");
         *self.conn_id.write().await = conn_id.clone().into_bytes();
+        debug!("Debug after second lock");
 
         let hb_id_generator = self.id_generator.clone();
         let hb_nats_client = self.nats_client.clone();
@@ -173,8 +177,9 @@ impl StanClient {
                 client_id.clone(), heartbeat_inbox.clone()).await;
         });
 
-
+        debug!("Before subscriptions lock");
         let subscriptions = self.subscriptions.write().await;
+        debug!("After subscriptions lock");
         let subscriptions = subscriptions.values().map(|s| s.clone());
 
 
