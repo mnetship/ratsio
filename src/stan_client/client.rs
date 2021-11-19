@@ -187,6 +187,10 @@ impl StanClient {
             // debug!("{:#?}", &sub);
             let _ = self.re_subscribe(&client_info, sub).await;
         }
+        for sub in subscriptions.clone() {
+            // debug!("{:#?}", &sub);
+            let _ = self.re_subscribe(&client_info, sub).await;
+        }
         debug!("After loop");
         Ok(())
     }
