@@ -284,7 +284,7 @@ impl NatsClientInner {
         info!("Reconnecting to NATS servers 4 - new version {}", new_version);
         let _ = NatsClientInner::start(client_ref.inner.clone(), new_version, stream).await?;
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(1));
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
         if self.opts.subscribe_on_reconnect {
             let subscriptions = self.subscriptions.lock().await;
