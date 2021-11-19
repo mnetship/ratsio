@@ -126,6 +126,17 @@ impl StanClient {
     }
 
     async fn on_reconnect(&self) -> Result<(), RatsioError> {
+        loop {
+            match self.on_reconnect_helper().await {
+                Ok(_) => break,
+                Err(error) => error!("{:?}", error)
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn on_reconnect_helper(&self) -> Result<(), RatsioError> {
         let close_requests = self.client_info.read().await.close_requests.clone();
         //We may need to disconnect first .
         let nats_client = self.nats_client.clone();
@@ -161,11 +172,8 @@ impl StanClient {
         let connect_response = protocol::ConnectResponse::decode(connect_response.payload.as_slice())?;
         let client_info: ClientInfo = connect_response.into();
 
-        debug!("Before locks");
         *self.client_info.write().await = client_info.clone();
-        debug!("Debug after first lock");
         *self.conn_id.write().await = conn_id.clone().into_bytes();
-        debug!("Debug after second lock");
 
         let hb_id_generator = self.id_generator.clone();
         let hb_nats_client = self.nats_client.clone();
@@ -184,14 +192,11 @@ impl StanClient {
         };
 
         for sub in subscriptions.clone() {
-            // debug!("{:#?}", &sub);
             let _ = self.re_subscribe(&client_info, sub).await;
         }
         for sub in subscriptions.clone() {
-            // debug!("{:#?}", &sub);
             let _ = self.re_subscribe(&client_info, sub).await;
         }
-        debug!("After loop");
         Ok(())
     }
 
