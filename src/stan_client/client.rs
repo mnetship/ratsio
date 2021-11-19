@@ -176,10 +176,10 @@ impl StanClient {
                 client_id.clone(), heartbeat_inbox.clone()).await;
         });
 
-        let subscriptions ={
+        let subscriptions = {
             let subscriptions = self.subscriptions.write().await;
 
-            subscriptions.values().map(|s| s.clone())
+            subscriptions.values().map(|s| s.clone()).collect::<Vec<Subscription>>()
         };
 
         for sub in subscriptions {
