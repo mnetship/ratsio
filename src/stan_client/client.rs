@@ -139,8 +139,7 @@ impl StanClient {
 
 
         let conn_id = self.id_generator.write().await.next();
-        let mut old_conn_id = self.conn_id.write().await;
-        *old_conn_id = conn_id.clone().into_bytes().clone();
+        *self.conn_id.write().await = conn_id.clone().into_bytes().clone();
 
         debug!("Connection id => {}", &conn_id);
         let heartbeat_inbox: String = format!("_HB.{}", self.id_generator.write().await.next());
