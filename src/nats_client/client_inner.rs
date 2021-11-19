@@ -244,7 +244,6 @@ impl NatsClientInner {
     }
 
     pub async fn reconnect(&self) -> Result<(), RatsioError> {
-        warn!("Some shit here 0");
         {
             let mut state_guard = self.state.write().await;
             if *state_guard == NatsClientState::Disconnected {
@@ -253,8 +252,6 @@ impl NatsClientInner {
                 return Ok(());
             }
         }
-
-        warn!("Some shit here 1");
 
         match self.do_reconnect().await {
             Ok(_) => {
@@ -288,16 +285,6 @@ impl NatsClientInner {
         let _ = NatsClientInner::start(client_ref.inner.clone(), new_version, stream).await?;
         if self.opts.subscribe_on_reconnect {
             let subscriptions = self.subscriptions.lock().await;
-            for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
-                match self.send_command(Op::SUB(subscribe_command.clone())).await {
-                    Ok(_) => {
-                        info!("re subscribed to => {:?}", subscribe_command.subject.clone());
-                    }
-                    Err(err) => {
-                        info!(" Failed to resubscribe to => {:?}, reason => {:?}", subscribe_command.clone(), err);
-                    }
-                }
-            }
             for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
                 match self.send_command(Op::SUB(subscribe_command.clone())).await {
                     Ok(_) => {
