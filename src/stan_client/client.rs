@@ -181,7 +181,7 @@ impl StanClient {
             subscriptions.values().map(|s| s.clone()).collect::<Vec<Subscription>>()
         };
 
-        for sub in subscriptions {
+        for sub in subscriptions.clone() {
             let _ = self.re_subscribe(&client_info, sub).await;
         }
 
