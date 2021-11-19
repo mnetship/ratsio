@@ -126,7 +126,6 @@ impl StanClient {
     }
 
     async fn on_reconnect(&self) -> Result<(), RatsioError> {
-
         let close_requests = self.client_info.read().await.close_requests.clone();
         //We may need to disconnect first .
         let nats_client = self.nats_client.clone();
@@ -190,7 +189,6 @@ impl StanClient {
     }
 
     async fn re_subscribe(&self, client_info: &ClientInfo, sub: Subscription) -> Result<(), RatsioError> {
-
         let inbox: String = format!("_SUB.{}", self.id_generator.write().await.next());
         let sub_request = protocol::SubscriptionRequest {
             client_id: self.client_id.clone(),
@@ -209,34 +207,39 @@ impl StanClient {
         sub_request.encode(&mut su_req_buf).unwrap();
 
         let sender = sub.sender.clone();
-        if let Ok(sub_response) = self.nats_client.request(&client_info.sub_requests, su_req_buf.as_slice()).await {
-            let sub_response = protocol::SubscriptionResponse::decode(&sub_response.payload[..]).unwrap();
-            let ack_inbox = sub_response.ack_inbox.clone();
-            let (sid, mut subscription) = self.nats_client.subscribe(inbox.clone()).await?;
+        match self.nats_client.request(&client_info.sub_requests, su_req_buf.as_slice()).await {
+            Ok(sub_response) => {
+                let sub_response = protocol::SubscriptionResponse::decode(&sub_response.payload[..]).unwrap();
+                let ack_inbox = sub_response.ack_inbox.clone();
+                let (sid, mut subscription) = self.nats_client.subscribe(inbox.clone()).await?;
 
-            let mut subscriptions = self.subscriptions.write().await;
-            let stan_sid = StanSid(sid);
-            let new_sub = Subscription {
-                client_id: self.client_id.clone(),
-                subject: sub.subject.clone(),
-                durable_name: sub.durable_name.clone(),
-                queue_group: sub.queue_group.clone(),
-                max_in_flight: sub.max_in_flight,
-                ack_wait_in_secs: sub.ack_wait_in_secs,
-                inbox: sub.inbox.clone(),
-                ack_inbox: ack_inbox.clone(),
-                unsub_requests: client_info.unsub_requests.clone(),
-                close_requests: client_info.close_requests.clone(),
-                sender: sender.clone(),
-            };
-            subscriptions.insert((stan_sid.0).0.clone(), new_sub);
+                let mut subscriptions = self.subscriptions.write().await;
+                let stan_sid = StanSid(sid);
+                let new_sub = Subscription {
+                    client_id: self.client_id.clone(),
+                    subject: sub.subject.clone(),
+                    durable_name: sub.durable_name.clone(),
+                    queue_group: sub.queue_group.clone(),
+                    max_in_flight: sub.max_in_flight,
+                    ack_wait_in_secs: sub.ack_wait_in_secs,
+                    inbox: sub.inbox.clone(),
+                    ack_inbox: ack_inbox.clone(),
+                    unsub_requests: client_info.unsub_requests.clone(),
+                    close_requests: client_info.close_requests.clone(),
+                    sender: sender.clone(),
+                };
+                subscriptions.insert((stan_sid.0).0.clone(), new_sub);
 
 
-            tokio::spawn(async move {
-                while let Some(nats_msg) = subscription.next().await {
-                    let _ = sender.send(ClosableMessage::Message(nats_msg));
-                }
-            });
+                tokio::spawn(async move {
+                    while let Some(nats_msg) = subscription.next().await {
+                        let _ = sender.send(ClosableMessage::Message(nats_msg));
+                    }
+                });
+            }
+            Err(error) => {
+                error!("{:?}", error)
+            }
         }
         Ok(())
     }
@@ -296,7 +299,6 @@ impl StanClient {
                              max_in_flight: i32, ack_wait_in_secs: i32, start_position: StartPosition,
                              start_sequence: u64, start_time_delta: Option<i32>, manual_acks: bool,
     ) -> Result<(StanSid, impl Stream<Item=StanMessage> + Send + Sync), RatsioError> {
-
         let client_info = self.client_info.read().await.clone();
         let inbox: String = format!("_SUB.{}", self.id_generator.write().await.next());
 
@@ -352,15 +354,18 @@ impl StanClient {
                 }
             });
 
-            Ok((stan_sid, StanClosableReceiver{
-                receiver, ack_inbox, manual_acks, stan_client:self.get_self_reference().await
+            Ok((stan_sid, StanClosableReceiver {
+                receiver,
+                ack_inbox,
+                manual_acks,
+                stan_client: self.get_self_reference().await,
             }))
         } else {
             Err(RatsioError::InternalServerError)
         }
     }
 
-    async fn get_self_reference(&self) -> Arc<StanClient>{
+    async fn get_self_reference(&self) -> Arc<StanClient> {
         self.self_reference.read().await.clone().unwrap()
     }
 
@@ -458,7 +463,6 @@ impl StanClient {
     }
 
     pub async fn close(&self) -> Result<(), RatsioError> {
-
         let client_info = self.client_info.read().await;
         let nats_client = self.nats_client.clone();
         let client_id = self.client_id.clone();
