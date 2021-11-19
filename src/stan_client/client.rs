@@ -185,6 +185,7 @@ impl StanClient {
         for sub in subscriptions {
             let _ = self.re_subscribe(&client_info, sub).await;
         }
+        debug!("After loop");
         Ok(())
     }
 
