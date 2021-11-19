@@ -176,11 +176,11 @@ impl StanClient {
                 client_id.clone(), heartbeat_inbox.clone()).await;
         });
 
-        debug!("Before subscriptions lock");
-        let subscriptions = self.subscriptions.write().await;
-        debug!("After subscriptions lock");
-        let subscriptions = subscriptions.values().map(|s| s.clone());
+        let subscriptions ={
+            let subscriptions = self.subscriptions.write().await;
 
+            subscriptions.values().map(|s| s.clone())
+        };
 
         for sub in subscriptions {
             let _ = self.re_subscribe(&client_info, sub).await;
