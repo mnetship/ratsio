@@ -175,6 +175,8 @@ impl StanClient {
                 client_id.clone(), heartbeat_inbox.clone()).await;
         });
 
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
         let subscriptions = {
             let subscriptions = self.subscriptions.write().await;
 
