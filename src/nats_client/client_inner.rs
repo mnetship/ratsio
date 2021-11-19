@@ -285,47 +285,29 @@ impl NatsClientInner {
         let new_version = *version + 1;
         *version = new_version;
         info!("Reconnecting to NATS servers 4 - new version {}", new_version);
-
         let _ = NatsClientInner::start(client_ref.inner.clone(), new_version, stream).await?;
-
         if self.opts.subscribe_on_reconnect {
-            let sub_vec = {
-                let subscriptions = self.subscriptions.lock().await;
-
-                subscriptions
-                    .iter()
-                    .map(|(_, (_, subscribe_command))| subscribe_command.subject.clone())
-                    .collect::<Vec<String>>()
-            };
-
-            for subject in sub_vec {
-                warn!("Zdarova");
-
-                warn!("Mi v pshe zdec', kurwa");
-
-                let cmd = Subscribe {
-                    subject: subject.to_string(),
-                    ..Default::default()
-                };
-
-                warn!("Vsyo, paka");
-
-                match self.subscribe(cmd).await {
-                    Ok(_) => {info!("re subscribed to => {}", subject);}
-                    Err(err) => {info!(" Failed to resubscribe to => {}, reason => {:?}", subject, err);}
+            let subscriptions = self.subscriptions.lock().await;
+            for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
+                match self.send_command(Op::SUB(subscribe_command.clone())).await {
+                    Ok(_) => {
+                        info!("re subscribed to => {:?}", subscribe_command.subject.clone());
+                    }
+                    Err(err) => {
+                        info!(" Failed to resubscribe to => {:?}, reason => {:?}", subscribe_command.clone(), err);
+                    }
                 }
             }
-
-
-                // match self.send_command(Op::SUB(subscribe_command.clone())).await {
-                //     Ok(_) => {
-                //         info!("re subscribed to => {:?}", subscribe_command.subject.clone());
-                //     }
-                //     Err(err) => {
-                //         info!(" Failed to resubscribe to => {:?}, reason => {:?}", subscribe_command.clone(), err);
-                //     }
-                // }
-            // }
+            for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
+                match self.send_command(Op::SUB(subscribe_command.clone())).await {
+                    Ok(_) => {
+                        info!("re subscribed to => {:?}", subscribe_command.subject.clone());
+                    }
+                    Err(err) => {
+                        info!(" Failed to resubscribe to => {:?}, reason => {:?}", subscribe_command.clone(), err);
+                    }
+                }
+            }
         }
         client_ref.on_reconnect().await;
         Ok(())
