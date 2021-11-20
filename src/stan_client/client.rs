@@ -185,6 +185,7 @@ impl StanClient {
 
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
+        debug!("After sleep");
         let subscriptions = {
             let subscriptions = self.subscriptions.write().await;
 
