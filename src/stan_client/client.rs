@@ -201,7 +201,7 @@ impl StanClient {
 
     // TODO clean old subscriptions
     async fn re_subscribe(&self, client_info: &ClientInfo, sub: Subscription) -> Result<(), RatsioError> {
-        let inbox: String = format!("_SUB.{}", self.id_generator.write().await.next()); // ORIGINAL
+        let inbox: String = format!("_SUB.{}", self.id_generator.write().await.next());
         let sub_request = protocol::SubscriptionRequest {
             client_id: self.client_id.clone(),
             subject: sub.subject.to_string(),
