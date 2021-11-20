@@ -185,19 +185,24 @@ impl StanClient {
 
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
-        debug!("After sleep");
         let subscriptions = {
             let subscriptions = self.subscriptions.write().await;
 
             subscriptions.values().map(|s| s.clone()).collect::<Vec<Subscription>>()
         };
 
-        debug!("Before loop 1");
-
         for sub in subscriptions.clone() {
             let _ = self.re_subscribe(&client_info, sub).await;
         }
-        debug!("Before loop 2");
+        for sub in subscriptions.clone() {
+            let _ = self.re_subscribe(&client_info, sub).await;
+        }
+        for sub in subscriptions.clone() {
+            let _ = self.re_subscribe(&client_info, sub).await;
+        }
+        for sub in subscriptions.clone() {
+            let _ = self.re_subscribe(&client_info, sub).await;
+        }
         for sub in subscriptions.clone() {
             let _ = self.re_subscribe(&client_info, sub).await;
         }

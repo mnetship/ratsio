@@ -298,7 +298,36 @@ impl NatsClientInner {
                     }
                 }
             }
-
+            for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
+                match self.send_command(Op::SUB(subscribe_command.clone())).await {
+                    Ok(_) => {
+                        info!("re subscribed to => {:?}", subscribe_command.subject.clone());
+                    }
+                    Err(err) => {
+                        info!(" Failed to resubscribe to => {:?}, reason => {:?}", subscribe_command.clone(), err);
+                    }
+                }
+            }
+            for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
+                match self.send_command(Op::SUB(subscribe_command.clone())).await {
+                    Ok(_) => {
+                        info!("re subscribed to => {:?}", subscribe_command.subject.clone());
+                    }
+                    Err(err) => {
+                        info!(" Failed to resubscribe to => {:?}, reason => {:?}", subscribe_command.clone(), err);
+                    }
+                }
+            }
+            for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
+                match self.send_command(Op::SUB(subscribe_command.clone())).await {
+                    Ok(_) => {
+                        info!("re subscribed to => {:?}", subscribe_command.subject.clone());
+                    }
+                    Err(err) => {
+                        info!(" Failed to resubscribe to => {:?}, reason => {:?}", subscribe_command.clone(), err);
+                    }
+                }
+            }
             for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
                 match self.send_command(Op::SUB(subscribe_command.clone())).await {
                     Ok(_) => {
