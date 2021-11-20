@@ -200,8 +200,7 @@ impl StanClient {
     }
 
     async fn re_subscribe(&self, client_info: &ClientInfo, sub: Subscription) -> Result<(), RatsioError> {
-        // let inbox: String = format!("_SUB.{}", self.id_generator.write().await.next()); // ORIGINAL
-        let inbox = sub.inbox.clone();
+        let inbox: String = format!("_SUB.{}", self.id_generator.write().await.next()); // ORIGINAL
         let sub_request = protocol::SubscriptionRequest {
             client_id: self.client_id.clone(),
             subject: sub.subject.to_string(),
@@ -234,7 +233,7 @@ impl StanClient {
                     queue_group: sub.queue_group.clone(),
                     max_in_flight: sub.max_in_flight,
                     ack_wait_in_secs: sub.ack_wait_in_secs,
-                    inbox: sub.inbox.clone(), // Why sub.inbox, not inbox?
+                    inbox: inbox.clone(), // Why sub.inbox, not inbox?
                     ack_inbox: ack_inbox.clone(),
                     unsub_requests: client_info.unsub_requests.clone(),
                     close_requests: client_info.close_requests.clone(),
