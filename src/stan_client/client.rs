@@ -191,12 +191,16 @@ impl StanClient {
             subscriptions.values().map(|s| s.clone()).collect::<Vec<Subscription>>()
         };
 
+        debug!("Before loop 1");
+
         for sub in subscriptions.clone() {
             let _ = self.re_subscribe(&client_info, sub).await;
         }
+        debug!("Before loop 2");
         for sub in subscriptions.clone() {
             let _ = self.re_subscribe(&client_info, sub).await;
         }
+        debug!("After loops");
         Ok(())
     }
 
