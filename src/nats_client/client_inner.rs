@@ -275,8 +275,11 @@ impl NatsClientInner {
         } else {
             return Err(RatsioError::CannotReconnectToServer);
         };
+        debug!("[Inner] - client_ref = {:?}", client_ref);
         let tcp_stream = Self::try_connect(self.opts.clone(), &self.opts.cluster_uris.0, true).await?;
+        debug!("[Inner] - tcp_stream = {:?}", tcp_stream);
         let (sink, stream) = NatsTcpStream::new(tcp_stream).await.split();
+        debug!("[Inner] - sink = {:?}", sink);
         *self.conn_sink.lock().await = sink;
         let mut version = self.reconnect_version.write().await;
         let new_version = *version + 1;
@@ -289,6 +292,8 @@ impl NatsClientInner {
         if self.opts.subscribe_on_reconnect {
             let subscriptions = self.subscriptions.lock().await;
             for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
+                debug!("[Inner] - _sid = {:?}", _sid);
+                debug!("[Inner] - subscribe_command = {:?}", subscribe_command);
                 match self.send_command(Op::SUB(subscribe_command.clone())).await {
                     Ok(_) => {
                         info!("re subscribed to => {:?}", subscribe_command.subject.clone());
