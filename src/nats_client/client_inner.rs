@@ -270,6 +270,7 @@ impl NatsClientInner {
 
     async fn do_reconnect(&self) -> Result<(), RatsioError> {
         let client_ref_guard = self.client_ref.read().await;
+        debug!("[Inner] - client_ref_guard = {:?}", client_ref_guard);
         let client_ref = if let Some(client_ref) = client_ref_guard.as_ref() {
             client_ref.clone()
         } else {
@@ -282,7 +283,9 @@ impl NatsClientInner {
         debug!("[Inner] - sink = {:?}", sink);
         *self.conn_sink.lock().await = sink;
         let mut version = self.reconnect_version.write().await;
+        debug!("[Inner] - version = {:?}", version);
         let new_version = *version + 1;
+        debug!("[Inner] - new_version = {:?}", new_version);
         *version = new_version;
         info!("Reconnecting to NATS servers 4 - new version {}", new_version);
         let _ = NatsClientInner::start(client_ref.inner.clone(), new_version, stream).await?;
