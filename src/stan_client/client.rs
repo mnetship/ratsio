@@ -186,6 +186,7 @@ impl StanClient {
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
         let subscriptions = {
+            // FIXME maybe use read() not write
             let subscriptions = self.subscriptions.write().await;
 
             subscriptions.values().map(|s| s.clone()).collect::<Vec<Subscription>>()
@@ -199,7 +200,8 @@ impl StanClient {
     }
 
     async fn re_subscribe(&self, client_info: &ClientInfo, sub: Subscription) -> Result<(), RatsioError> {
-        let inbox: String = format!("_SUB.{}", self.id_generator.write().await.next());
+        // let inbox: String = format!("_SUB.{}", self.id_generator.write().await.next()); // ORIGINAL
+        let inbox = sub.inbox.clone();
         let sub_request = protocol::SubscriptionRequest {
             client_id: self.client_id.clone(),
             subject: sub.subject.to_string(),
@@ -232,7 +234,7 @@ impl StanClient {
                     queue_group: sub.queue_group.clone(),
                     max_in_flight: sub.max_in_flight,
                     ack_wait_in_secs: sub.ack_wait_in_secs,
-                    inbox: sub.inbox.clone(),
+                    inbox: sub.inbox.clone(), // Why sub.inbox, not inbox?
                     ack_inbox: ack_inbox.clone(),
                     unsub_requests: client_info.unsub_requests.clone(),
                     close_requests: client_info.close_requests.clone(),
@@ -322,11 +324,11 @@ impl StanClient {
             start_sequence,
             start_time_delta: (start_time_delta.unwrap_or_default() as i64),
             start_position: match start_position {
-                StartPosition::NewOnly => protocol::StartPosition::NewOnly as i32,
-                StartPosition::LastReceived => protocol::StartPosition::LastReceived as i32,
-                StartPosition::TimeDeltaStart => protocol::StartPosition::TimeDeltaStart as i32,
-                StartPosition::SequenceStart => protocol::StartPosition::SequenceStart as i32,
-                StartPosition::First => protocol::StartPosition::First as i32,
+                StartPosition::NewOnly => protocol::StartPosition::NewOnly as i32, // Отправляет только новые сообщения
+                StartPosition::LastReceived => protocol::StartPosition::LastReceived as i32, // Отправляет только последнее полученное сообщение
+                StartPosition::TimeDeltaStart => protocol::StartPosition::TimeDeltaStart as i32, // Отправляет сообщения из определенного промежутка
+                StartPosition::SequenceStart => protocol::StartPosition::SequenceStart as i32, // Отправляет сообщения начинающиеся с последовательности
+                StartPosition::First => protocol::StartPosition::First as i32, // Все
             },
             inbox: inbox.clone(),
         };

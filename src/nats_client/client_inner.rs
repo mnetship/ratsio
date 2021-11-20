@@ -160,6 +160,7 @@ impl NatsClientInner {
         cmd: Subscribe,
     ) -> Result<(NatsSid, impl Stream<Item=Message> + Send + Sync), RatsioError> {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        // FIXME redundant if sid always NOT EMPTY
         let sid = if cmd.sid.is_empty() {
             crate::nuid::next()
         } else {
