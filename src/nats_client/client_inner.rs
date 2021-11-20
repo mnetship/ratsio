@@ -166,7 +166,7 @@ impl NatsClientInner {
         } else {
             cmd.sid.clone()
         };
-        // let mut subscriptions = self.subscriptions.lock().await;
+        let mut subscriptions = self.subscriptions.lock().await;
         // subscriptions.insert(sid.clone(), (sender, cmd.clone()));
         let _ = self.send_command(Op::SUB(cmd)).await?;
         Ok((NatsSid(sid), NatsClosableReceiver(receiver)))
