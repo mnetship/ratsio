@@ -295,18 +295,20 @@ impl NatsClientInner {
 
         if self.opts.subscribe_on_reconnect {
             let subscriptions = self.subscriptions.lock().await;
-            // for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
-            //     debug!("[Inner] - _sid = {:?}", _sid);
-            //     debug!("[Inner] - subscribe_command = {:?}", subscribe_command);
-            //     match self.send_command(Op::SUB(subscribe_command.clone())).await {
-            //         Ok(_) => {
-            //             info!("re subscribed to => {:?}", subscribe_command.subject.clone());
-            //         }
-            //         Err(err) => {
-            //             info!(" Failed to resubscribe to => {:?}, reason => {:?}", subscribe_command.clone(), err);
-            //         }
-            //     }
-            // }
+            for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
+                if subscribe_command.subject.contains("_SUB") {
+                    warn!("[Inner] - skip {:?}", subscribe_command.subject)
+                } else {
+                    match self.send_command(Op::SUB(subscribe_command.clone())).await {
+                        Ok(_) => {
+                            info!("re subscribed to => {:?}", subscribe_command.subject.clone());
+                        }
+                        Err(err) => {
+                            info!(" Failed to resubscribe to => {:?}, reason => {:?}", subscribe_command.clone(), err);
+                        }
+                    }
+                }
+            }
         }
         client_ref.on_reconnect().await;
         Ok(())
