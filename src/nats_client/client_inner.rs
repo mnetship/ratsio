@@ -271,24 +271,23 @@ impl NatsClientInner {
 
     async fn do_reconnect(&self) -> Result<(), RatsioError> {
         let client_ref_guard = self.client_ref.read().await;
-        debug!("[Inner] - client_ref_guard = {:?}", client_ref_guard);
         let client_ref = if let Some(client_ref) = client_ref_guard.as_ref() {
             client_ref.clone()
         } else {
             return Err(RatsioError::CannotReconnectToServer);
         };
-        debug!("[Inner] - client_ref = {:?}", client_ref);
         let tcp_stream = Self::try_connect(self.opts.clone(), &self.opts.cluster_uris.0, true).await?;
-        debug!("[Inner] - tcp_stream = {:?}", tcp_stream);
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         let (sink, stream) = NatsTcpStream::new(tcp_stream).await.split();
-        debug!("[Inner] - sink = {:?}", sink);
         *self.conn_sink.lock().await = sink;
+
+        // TODO replace this with `self.reconnect_version.write().await += 1;`
         let mut version = self.reconnect_version.write().await;
-        debug!("[Inner] - version = {:?}", version);
         let new_version = *version + 1;
-        debug!("[Inner] - new_version = {:?}", new_version);
         *version = new_version;
+
         info!("Reconnecting to NATS servers 4 - new version {}", new_version);
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         let _ = NatsClientInner::start(client_ref.inner.clone(), new_version, stream).await?;
 
         // tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
