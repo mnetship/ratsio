@@ -18,6 +18,7 @@ use futures::{
 use std::pin::Pin;
 use futures::stream::Stream;
 use std::task::{Context, Poll};
+use std::thread::sleep;
 use crate::ops::Op::UNSUB;
 use pin_project::pin_project;
 
@@ -277,6 +278,7 @@ impl NatsClientInner {
             return Err(RatsioError::CannotReconnectToServer);
         };
         let tcp_stream = Self::try_connect(self.opts.clone(), &self.opts.cluster_uris.0, true).await?;
+        tokio::time::sleep(Duration::from_secs(5)).await;
         let tcp_stream = Self::try_connect(self.opts.clone(), &self.opts.cluster_uris.0, true).await?;
 
         let (sink, stream) = NatsTcpStream::new(tcp_stream).await.split();
