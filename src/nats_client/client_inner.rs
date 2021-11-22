@@ -278,22 +278,12 @@ impl NatsClientInner {
             return Err(RatsioError::CannotReconnectToServer);
         };
         let tcp_stream = Self::try_connect(self.opts.clone(), &self.opts.cluster_uris.0, true).await?;
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        let tcp_stream = Self::try_connect(self.opts.clone(), &self.opts.cluster_uris.0, true).await?;
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
         let (sink, stream) = NatsTcpStream::new(tcp_stream).await.split();
         *self.conn_sink.lock().await = sink;
-
-        // TODO replace this with `self.reconnect_version.write().await += 1;`
-        let mut version = self.reconnect_version.write().await;
-        let new_version = *version + 1;
-        *version = new_version;
+        *self.reconnect_version.write().await += 1;
 
         info!("Reconnecting to NATS servers 4 - new version {}", new_version);
         let _ = NatsClientInner::start(client_ref.inner.clone(), new_version, stream).await?;
-
-
         if self.opts.subscribe_on_reconnect {
             let subscriptions = self.subscriptions.lock().await;
             for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {

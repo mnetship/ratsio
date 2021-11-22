@@ -85,13 +85,13 @@ impl StanClient {
                 client_id.clone(), heartbeat_inbox.clone()).await;
         });
 
-        let reconnect_stan_client = stan_client.clone();
-        stan_client.nats_client.add_reconnect_handler(Box::new(move |_nats_client| {
-            let stan_client = reconnect_stan_client.clone();
-            tokio::spawn(async move {
-                let _ = stan_client.clone().on_reconnect().await;
-            });
-        })).await?;
+        // let reconnect_stan_client = stan_client.clone();
+        // stan_client.nats_client.add_reconnect_handler(Box::new(move |_nats_client| {
+        //     let stan_client = reconnect_stan_client.clone();
+        //     tokio::spawn(async move {
+        //         let _ = stan_client.clone().on_reconnect().await;
+        //     });
+        // })).await?;
 
         Ok(stan_client)
     }
