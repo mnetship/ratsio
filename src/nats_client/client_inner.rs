@@ -278,6 +278,8 @@ impl NatsClientInner {
         };
         let tcp_stream = Self::try_connect(self.opts.clone(), &self.opts.cluster_uris.0, true).await?;
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        let tcp_stream = Self::try_connect(self.opts.clone(), &self.opts.cluster_uris.0, true).await?;
+
         let (sink, stream) = NatsTcpStream::new(tcp_stream).await.split();
         *self.conn_sink.lock().await = sink;
 
