@@ -18,6 +18,7 @@ use futures::{
 use std::pin::Pin;
 use futures::stream::Stream;
 use std::task::{Context, Poll};
+use std::thread::sleep;
 use crate::ops::Op::UNSUB;
 use pin_project::pin_project;
 
@@ -160,6 +161,7 @@ impl NatsClientInner {
         cmd: Subscribe,
     ) -> Result<(NatsSid, impl Stream<Item=Message> + Send + Sync), RatsioError> {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        // FIXME redundant if sid always NOT EMPTY
         let sid = if cmd.sid.is_empty() {
             crate::nuid::next()
         } else {
@@ -244,11 +246,13 @@ impl NatsClientInner {
     }
 
     pub async fn reconnect(&self) -> Result<(), RatsioError> {
-        let mut state_guard = self.state.write().await;
-        if *state_guard == NatsClientState::Disconnected {
-            *state_guard = NatsClientState::Reconnecting;
-        } else {
-            return Ok(());
+        {
+            let mut state_guard = self.state.write().await;
+            if *state_guard == NatsClientState::Disconnected {
+                *state_guard = NatsClientState::Reconnecting;
+            } else {
+                return Ok(());
+            }
         }
 
         match self.do_reconnect().await {
@@ -276,11 +280,9 @@ impl NatsClientInner {
         let tcp_stream = Self::try_connect(self.opts.clone(), &self.opts.cluster_uris.0, true).await?;
         let (sink, stream) = NatsTcpStream::new(tcp_stream).await.split();
         *self.conn_sink.lock().await = sink;
-        let mut version = self.reconnect_version.write().await;
-        let new_version = *version + 1;
-        *version = new_version;
-        info!("Reconnecting to NATS servers 4 - new version {}", new_version);
-        let _ = NatsClientInner::start(client_ref.inner.clone(), new_version, stream).await?;
+        *self.reconnect_version.write().await += 1;
+
+        let _ = NatsClientInner::start(client_ref.inner.clone(), 1, stream).await?;
         if self.opts.subscribe_on_reconnect {
             let subscriptions = self.subscriptions.lock().await;
             for (_sid, (_sender, subscribe_command)) in subscriptions.iter() {
@@ -308,9 +310,11 @@ impl NatsClientInner {
         let ping_max_out = u128::from(self.opts.ping_max_out);
         loop {
             let _ = Delay::new(Duration::from_millis((ping_interval / 2) as u64)).await;
-            let state_guard = self.state.read().await;
-            if *state_guard == NatsClientState::Shutdown {
-                break;
+            {
+                let state_guard = self.state.read().await;
+                if *state_guard == NatsClientState::Shutdown {
+                    break;
+                }
             }
 
             let mut reconnect_required = false;
@@ -335,8 +339,10 @@ impl NatsClientInner {
 
             if reconnect_required {
                 error!("Missed too many pings, reconnect is required.");
-                let mut state_guard = self.state.write().await;
-                *state_guard = NatsClientState::Disconnected;
+                {
+                    let mut state_guard = self.state.write().await;
+                    *state_guard = NatsClientState::Disconnected;
+                }
                 let _ = self.reconnect().await;
             }
         }

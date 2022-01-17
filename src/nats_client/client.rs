@@ -74,6 +74,7 @@ impl NatsClient {
             subject: subject.to_string(),
             ..Default::default()
         };
+        debug!("[Nats] - cmd = {:?}", cmd);
         self.inner.subscribe(cmd).await
     }
 
